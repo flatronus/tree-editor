@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#1a1a2e">
+<meta name="description" content="Текстовий редактор з деревовидною структурою сторінок">
+<link rel="manifest" href="manifest.json">
+<title>Arkhiv — текстовий редактор</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500&family=JetBrains+Mono:wght@400;500&family=Lora:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ── GLOBAL TOPBAR (full width, always on top) ── -->
+  <header id="global-topbar">
+    <div class="topbar-left">
+      <button id="btn-toggle-sidebar" class="icon-btn" title="Показати / сховати дерево">&#9776;</button>
+      <button id="btn-new-page" class="icon-btn" title="Нова сторінка (Ctrl+N)">+</button>
+      <span class="logo">Arkhiv</span>
+    </div>
+    <div class="topbar-center" id="global-breadcrumb"></div>
+    <div class="topbar-right">
+      <select id="format-select" title="Формат">
+        <option value="auto">Авто</option>
+        <option value="plain">Текст</option>
+        <option value="markdown">Markdown</option>
+        <option value="rich">Форматований</option>
+      </select>
+      <button id="btn-preview" class="action-btn" title="Попередній перегляд">&#9654; Перегляд</button>
+      <button id="btn-import" class="action-btn" title="Імпорт файлу">&#8681; Імпорт</button>
+      <button id="btn-export-pdf" class="action-btn" title="Експорт у PDF">PDF</button>
+      <button id="btn-save" class="action-btn primary" title="Зберегти (Ctrl+S)">Зберегти</button>
+      <button id="btn-delete-page" class="action-btn danger" title="Видалити сторінку">&#10005;</button>
+    </div>
+  </header>
+
+  <!-- ── BODY ROW: sidebar + editor ── -->
+  <div id="body-row">
+
+    <aside id="sidebar">
+      <div class="search-wrap">
+        <input id="search-input" type="text" placeholder="Пошук..." autocomplete="off">
+      </div>
+      <div id="tree-root" class="tree"></div>
+    </aside>
+
+    <main id="editor-area">
+      <div id="empty-state">
+        <div class="empty-icon">&#9112;</div>
+        <p>Оберіть або створіть сторінку</p>
+        <button id="btn-create-first">Створити першу сторінку</button>
+      </div>
+
+      <div id="editor-wrap" class="hidden">
+        <div id="breadcrumb-bar"></div>
+        <div id="editor-titlebar">
+          <input id="page-title" type="text" placeholder="Назва сторінки..." spellcheck="true">
+        </div>
+
+        <div id="format-bar" class="hidden">
+          <button data-cmd="bold" title="Жирний"><b>B</b></button>
+          <button data-cmd="italic" title="Курсив"><i>I</i></button>
+          <button data-cmd="underline" title="Підкреслення"><u>U</u></button>
+          <button data-cmd="strikeThrough" title="Закреслення"><s>S</s></button>
+          <span class="sep">|</span>
+          <button data-cmd="insertUnorderedList" title="Список">&#8226; Список</button>
+          <button data-cmd="insertOrderedList" title="Нумерований">1. Список</button>
+          <span class="sep">|</span>
+          <button data-heading="h2" title="Заголовок 2">H2</button>
+          <button data-heading="h3" title="Заголовок 3">H3</button>
+          <button data-heading="p" title="Звичайний текст">&#182;</button>
+          <span class="sep">|</span>
+          <button data-cmd="createLink" title="Посилання">&#128279;</button>
+          <button data-cmd="removeFormat" title="Очистити форматування">&#10006;</button>
+        </div>
+
+        <div id="editor-container">
+          <textarea id="editor-plain" placeholder="Починайте вводити текст..."></textarea>
+          <div id="editor-rich" contenteditable="true" spellcheck="true" placeholder="Починайте вводити текст..."></div>
+          <div id="editor-preview" class="hidden"></div>
+        </div>
+
+        <div id="editor-statusbar">
+          <span id="status-format">Формат: Авто</span>
+          <span id="status-words">0 слів</span>
+          <span id="status-saved">&#9679; збережено</span>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<div id="ctx-menu" class="ctx-menu hidden">
+  <button data-action="rename">Перейменувати</button>
+  <button data-action="add-child">Додати підсторінку</button>
+  <button data-action="duplicate">Дублювати</button>
+  <hr>
+  <button data-action="delete" class="danger">Видалити</button>
+</div>
+
+<div id="modal-overlay" class="hidden">
+  <div id="modal">
+    <p id="modal-text"></p>
+    <div class="modal-actions">
+      <button id="modal-confirm" class="primary">OK</button>
+      <button id="modal-cancel">Скасувати</button>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="file-input" accept=".txt,.md,.doc,.docx,.html" style="display:none">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="app.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
