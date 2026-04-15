@@ -3,34 +3,33 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#1a1a2e">
-<meta name="description" content="Текстовий редактор з деревовидною структурою сторінок">
+<meta name="theme-color" content="#4A90D9">
+<meta name="description" content="Arkhiv — текстовий редактор">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Arkhiv">
-<meta name="application-name" content="Arkhiv">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon.png">
 <link rel="apple-touch-icon" href="icon-180.png">
 <title>Arkhiv</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500&family=JetBrains+Mono:wght@400;500&family=Lora:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500&family=Lora:ital,wght@0,400;1,400&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div id="app">
 
-  <!-- ══ GLOBAL TOPBAR ══ -->
   <header id="global-topbar">
     <div class="topbar-left">
       <button id="btn-toggle-sidebar" class="icon-btn" title="Показати / сховати дерево">&#9776;</button>
-      <button id="btn-expand-labels" class="icon-btn" title="Розгорнути / згорнути назви в дереві">&#8801;</button>
-      <button id="btn-new-page" class="icon-btn" title="Нова сторінка (Ctrl+N)">+</button>
+      <button id="btn-expand-labels"  class="icon-btn" title="Розгорнути назви в дереві">&#8801;</button>
+      <button id="btn-new-page"       class="icon-btn" title="Нова сторінка (Ctrl+N)">+</button>
       <span class="logo">Arkhiv</span>
     </div>
     <div class="topbar-center" id="global-breadcrumb"></div>
     <div class="topbar-right">
+      <span id="status-sync" class="sync-badge"></span>
       <select id="format-select" title="Формат">
         <option value="auto">Авто</option>
         <option value="plain">Текст</option>
@@ -45,16 +44,12 @@
     </div>
   </header>
 
-  <!-- ══ BODY ROW ══ -->
   <div id="body-row">
-
-    <!-- Sidebar with resizable handle -->
     <aside id="sidebar">
       <div class="search-wrap">
         <input id="search-input" type="text" placeholder="Пошук..." autocomplete="off">
       </div>
       <div id="tree-root" class="tree"></div>
-      <!-- drag handle -->
       <div id="sidebar-resizer"></div>
     </aside>
 
@@ -70,7 +65,6 @@
         <div id="editor-titlebar">
           <input id="page-title" type="text" placeholder="Назва сторінки..." spellcheck="true">
         </div>
-
         <div id="format-bar" class="hidden">
           <button data-cmd="bold"><b>B</b></button>
           <button data-cmd="italic"><i>I</i></button>
@@ -87,17 +81,14 @@
           <button data-cmd="createLink">&#128279;</button>
           <button data-cmd="removeFormat">&#10006;</button>
         </div>
-
         <div id="editor-container">
           <textarea id="editor-plain" placeholder="Починайте вводити текст..."></textarea>
           <div id="editor-rich" contenteditable="true" spellcheck="true" placeholder="Починайте вводити текст..."></div>
           <div id="editor-preview" class="hidden"></div>
         </div>
-
         <div id="editor-statusbar">
           <span id="status-format">Формат: Авто</span>
           <span id="status-words">0 слів</span>
-          <span id="status-sync"></span>
           <span id="status-saved">&#9679; збережено</span>
         </div>
       </div>
@@ -105,7 +96,6 @@
   </div>
 </div>
 
-<!-- Context menu -->
 <div id="ctx-menu" class="ctx-menu hidden">
   <button data-action="rename">Перейменувати</button>
   <button data-action="add-child">Додати підсторінку</button>
@@ -114,7 +104,6 @@
   <button data-action="delete" class="danger">Видалити</button>
 </div>
 
-<!-- Modal -->
 <div id="modal-overlay" class="hidden">
   <div id="modal">
     <p id="modal-text"></p>
@@ -125,59 +114,27 @@
   </div>
 </div>
 
-<!-- Firebase config modal -->
-<div id="fb-modal" class="hidden">
-  <div id="fb-modal-box">
-    <h2>Підключення Firebase</h2>
-    <p>Вставте конфіг вашого Firebase проєкту (JSON з консолі Firebase):</p>
-    <textarea id="fb-config-input" spellcheck="false" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}'></textarea>
-    <div class="modal-actions">
-      <button id="fb-save-btn" class="primary">Підключити</button>
-      <button id="fb-cancel-btn">Скасувати</button>
-      <button id="fb-clear-btn" class="danger">Відключити</button>
-    </div>
-    <p id="fb-status"></p>
-  </div>
-</div>
-
 <input type="file" id="file-input" accept=".txt,.md,.html" style="display:none">
 
-<!-- Firebase SDK -->
-<script type="module">
-  import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-  import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, deleteDoc, writeBatch } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
-  window._fb = { initializeApp, getFirestore, doc, setDoc, getDoc, onSnapshot, collection, deleteDoc, writeBatch };
-</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+
+<!-- Firebase SDK v10 (modular, loaded as compat for simplicity) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
 <script src="app.js" defer></script>
 <script>
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').then(reg => {
-    // Check for updates every 60s
     setInterval(() => reg.update(), 60000);
-    reg.addEventListener('updatefound', () => {
-      const nw = reg.installing;
-      nw.addEventListener('statechange', () => {
-        if (nw.state === 'installed' && navigator.serviceWorker.controller) {
-          // New version available — silent update
-          nw.postMessage('SKIP_WAITING');
-        }
-      });
-    });
   }).catch(() => {});
-  // Reload when new SW takes control
-  let refreshing = false;
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (!refreshing) { refreshing = true; window.location.reload(); }
-  });
-}
-// Handle ?new=1 shortcut
-if (new URLSearchParams(location.search).get('new') === '1') {
-  window.addEventListener('load', () => {
-    history.replaceState({}, '', location.pathname);
-    document.getElementById('btn-new-page')?.click();
-  });
+  if (new URLSearchParams(location.search).get('new') === '1') {
+    window.addEventListener('load', () => {
+      history.replaceState({}, '', location.pathname);
+      setTimeout(() => document.getElementById('btn-new-page')?.click(), 800);
+    });
+  }
 }
 </script>
 </body>
