@@ -44,6 +44,11 @@ function initFirebase() {
     db.enablePersistence({ synchronizeTabs: true }).catch(() => {});
     fbReady = true;
     setSyncStatus('synced');
+    // Warn if running on domain that might not be authorized in Firebase
+    const host = location.hostname;
+    if (host !== 'localhost' && !host.includes('github.io') && host !== '127.0.0.1') {
+      console.warn('Firebase: домен', host, 'може бути не авторизований. Додай його в Authentication → Settings → Authorized domains');
+    }
     subscribeFirestore();
   } catch (e) {
     console.error('Firebase init failed', e);
@@ -146,8 +151,13 @@ function subscribeFirestore() {
       setSyncStatus('synced');
     },
     err => {
-      console.warn('Firestore snapshot error', err);
-      setSyncStatus(navigator.onLine ? 'error' : 'offline');
+      console.warn('Firestore snapshot error', err.code, err.message);
+      if (!navigator.onLine) { setSyncStatus('offline'); return; }
+      // Common causes: unauthorized domain, wrong rules, project not found
+      if (err.code === 'permission-denied') {
+        console.error('Firebase: перевір правила Firestore (дозволи) та авторизовані домени в Authentication → Settings');
+      }
+      setSyncStatus('error');
     }
   );
 }
@@ -683,12 +693,22 @@ function showModal(text, onConfirm) {
 }
 
 // ══ SIDEBAR ══════════════════════════════════════════════════
+function getSidebarTop() {
+  const tb = document.getElementById('global-topbar');
+  return tb ? tb.offsetHeight : 44;
+}
+
 function setSidebarOpen(open) {
   const sb = document.getElementById('sidebar');
   const isMobile = window.innerWidth <= 700;
-  if (isMobile) { sb.classList.toggle('mobile-open', open); sb.classList.remove('collapsed'); }
-  else { sb.classList.toggle('collapsed', !open); }
+  if (isMobile) {
+    sb.style.top = getSidebarTop() + 'px';
+    sb.classList.toggle('mobile-open', open); sb.classList.remove('collapsed');
+  } else { sb.classList.toggle('collapsed', !open); }
   localStorage.setItem(LS_SO, open ? '1' : '0');
+  // Update arrow icon: ← when open (click to close), → when closed (click to open)
+  const arrow = document.getElementById('sidebar-arrow');
+  if (arrow) arrow.innerHTML = open ? '&#8592;' : '&#8594;';
 }
 function toggleSidebar() {
   const sb = document.getElementById('sidebar');

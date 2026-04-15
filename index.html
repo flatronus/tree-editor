@@ -22,7 +22,7 @@
 
   <header id="global-topbar">
     <div class="topbar-left">
-      <button id="btn-toggle-sidebar" class="icon-btn" title="Показати / сховати дерево">&#9776;</button>
+      <button id="btn-toggle-sidebar" class="icon-btn" title="Показати / сховати дерево"><span id="sidebar-arrow">&#8592;</span></button>
       <button id="btn-expand-labels"  class="icon-btn" title="Розгорнути назви в дереві">&#8801;</button>
       <button id="btn-new-page"       class="icon-btn" title="Нова сторінка (Ctrl+N)">+</button>
       <span class="logo">Arkhiv</span>
@@ -36,11 +36,11 @@
         <option value="markdown">Markdown</option>
         <option value="rich">Форматований</option>
       </select>
-      <button id="btn-preview"     class="action-btn">&#9654; Перегляд</button>
-      <button id="btn-import"      class="action-btn">&#8681; Імпорт</button>
-      <button id="btn-export-pdf"  class="action-btn">PDF</button>
-      <button id="btn-save"        class="action-btn primary">Зберегти</button>
-      <button id="btn-delete-page" class="action-btn danger">&#10005;</button>
+      <button id="btn-preview"     class="action-btn" title="Перегляд"><span class="btn-icon">&#9654;</span><span class="btn-label"> Перегляд</span></button>
+      <button id="btn-import"      class="action-btn" title="Імпорт файлу"><span class="btn-icon">&#8681;</span><span class="btn-label"> Імпорт</span></button>
+      <button id="btn-export-pdf"  class="action-btn" title="Експорт PDF"><span class="btn-label">PDF</span></button>
+      <button id="btn-save"        class="action-btn primary" title="Зберегти (Ctrl+S)"><span class="btn-icon">&#128190;</span><span class="btn-label"> Зберегти</span></button>
+      <button id="btn-delete-page" class="action-btn danger"  title="Видалити сторінку">&#10005;</button>
     </div>
   </header>
 

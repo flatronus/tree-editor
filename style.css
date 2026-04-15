@@ -61,10 +61,10 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 /* ══ TOPBAR ══ */
 #global-topbar {
   display: flex; align-items: center;
-  height: var(--topbar-h); min-height: var(--topbar-h);
+  min-height: var(--topbar-h);
   background: linear-gradient(135deg, var(--top) 0%, #5ba3e8 100%);
   border-bottom: 1px solid var(--top2);
-  padding: 0 10px; gap: 6px;
+  padding: 6px 10px; gap: 6px;
   z-index: 200; flex-shrink: 0;
   box-shadow: 0 2px 8px rgba(74,144,217,.3);
 }
@@ -375,11 +375,34 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 
 .hidden { display: none !important; }
 
-/* ══ MOBILE ══ */
+/* ══ MOBILE & RESPONSIVE TOPBAR ══ */
+
+/* Topbar can wrap to 2 rows on small screens */
+#global-topbar {
+  flex-wrap: wrap;
+  height: auto;
+  min-height: var(--topbar-h);
+  padding-top: 6px;
+  padding-bottom: 6px;
+  row-gap: 4px;
+}
+.topbar-right { flex-wrap: wrap; row-gap: 4px; }
+
+/* Hide text labels on narrow screens, keep icons */
+@media (max-width: 540px) {
+  .btn-label { display: none; }
+  .action-btn { padding: 5px 8px; }
+  .logo { font-size: 14px; }
+  .topbar-center { display: none; }
+  #btn-expand-labels { display: none; }
+  #format-select { max-width: 70px; }
+}
+
 @media (max-width: 700px) {
   #sidebar {
     position: fixed !important;
-    top: var(--topbar-h) !important; left: 0 !important; bottom: 0 !important;
+    top: var(--topbar-h) !important;
+    left: 0 !important; bottom: 0 !important;
     width: 100vw !important; min-width: 100vw !important; max-width: 100vw !important;
     z-index: 150; transform: translateX(-100%);
     opacity: 1 !important; pointer-events: auto !important;
@@ -391,11 +414,6 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
   #sidebar-resizer { display: none; }
   #editor-plain, #editor-rich, #editor-preview { padding: 14px 16px; }
   #page-title { font-size: 18px; }
-  .topbar-right { gap: 3px; }
-  .action-btn { padding: 4px 7px; font-size: 10px; }
-  .logo { display: none; }
-  .topbar-center { display: none; }
-  #btn-expand-labels { display: none; }
 }
 
 /* ══ PWA SAFE AREA ══ */
