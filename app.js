@@ -25,66 +25,83 @@ let activeFormat  = 'plain';
 let previewActive = false;
 const expandState = {};
 
-// ══ FIREBASE ════════════════════════════════════════════════
-let db            = null;
-let fbReady       = false;
-let fbUnsub       = null;
-// Queue of page-ids to write (debounced)
-const writeQueue  = new Set();
-let writeTimer    = null;
+// ══════════════════════════════════════════════════════════════
+//  FIREBASE — Auth + Firestore
+//  Шлях: users/{uid}/pages/{pageId}  — відповідає правилам БД
+// ══════════════════════════════════════════════════════════════
+let db         = null;
+let auth       = null;
+let currentUid = null;
+let fbReady    = false;
+let fbUnsub    = null;
+const writeQueue = new Set();
+let writeTimer   = null;
 
+// Шлях до колекції сторінок поточного юзера
+function pagesCol() {
+  return db.collection('users').doc(currentUid).collection('pages');
+}
+
+// ── Ініціалізація Firebase ──────────────────────────────────
 function initFirebase() {
   try {
-    // firebase compat SDK is loaded via <script> tags
-    if (!firebase.apps.length) {
-      firebase.initializeApp(FB_CONFIG);
-    }
-    db = firebase.firestore();
-    // Enable offline persistence so it works without internet
-    db.enablePersistence({ synchronizeTabs: true }).catch(() => {});
-    fbReady = true;
-    setSyncStatus('synced');
-    // Warn if running on domain that might not be authorized in Firebase
-    const host = location.hostname;
-    if (host !== 'localhost' && !host.includes('github.io') && host !== '127.0.0.1') {
-      console.warn('Firebase: домен', host, 'може бути не авторизований. Додай його в Authentication → Settings → Authorized domains');
-    }
-    subscribeFirestore();
+    if (!firebase.apps.length) firebase.initializeApp(FB_CONFIG);
+    db   = firebase.firestore();
+    auth = firebase.auth();
+    db.enablePersistence({ synchronizeTabs: true }).catch(e => {
+      if (e.code !== 'failed-precondition') console.warn('Persistence:', e);
+    });
+    auth.onAuthStateChanged(onAuthStateChanged);
   } catch (e) {
     console.error('Firebase init failed', e);
     setSyncStatus('error');
   }
 }
 
+// ── Реакція на вхід / вихід ────────────────────────────────
+function onAuthStateChanged(user) {
+  if (user) {
+    currentUid = user.uid;
+    fbReady    = true;
+    hideAuthOverlay();
+    showUserBadge(user);
+    setSyncStatus('synced');
+    loadFromFirestore();
+    subscribeFirestore();
+  } else {
+    currentUid = null;
+    fbReady    = false;
+    if (fbUnsub) { fbUnsub(); fbUnsub = null; }
+    setSyncStatus('offline');
+    showAuthOverlay();
+  }
+}
+
+// ── Показ статусу ──────────────────────────────────────────
 function setSyncStatus(s) {
   const el = document.getElementById('status-sync');
   if (!el) return;
-  const map = {
-    syncing: '↻ синхронізація…',
-    synced:  '☁ синхронізовано',
-    offline: '○ офлайн',
-    error:   '⚠ помилка з\'єднання',
-  };
+  const map = { syncing:'↻ синхронізація…', synced:'☁ синхронізовано', offline:'○ офлайн', error:'⚠ помилка' };
   el.textContent = map[s] || '';
   el.className = 'sync-badge ' + s;
 }
 
-// Write single page — debounced in batches every 800ms
+// ── Запис сторінки ─────────────────────────────────────────
 function fbQueueWrite(page) {
-  if (!fbReady) return;
+  if (!fbReady || !currentUid) return;
   writeQueue.add(page.id);
   clearTimeout(writeTimer);
   writeTimer = setTimeout(flushWriteQueue, 800);
 }
 
 async function flushWriteQueue() {
-  if (!fbReady || writeQueue.size === 0) return;
+  if (!fbReady || !currentUid || writeQueue.size === 0) return;
   setSyncStatus('syncing');
   try {
     const batch = db.batch();
     for (const id of writeQueue) {
       const page = state.pages[id];
-      if (page) batch.set(db.collection('pages').doc(id), page);
+      if (page) batch.set(pagesCol().doc(id), page);
     }
     writeQueue.clear();
     await batch.commit();
@@ -92,96 +109,95 @@ async function flushWriteQueue() {
   } catch (e) {
     console.warn('Firestore write error', e);
     setSyncStatus('error');
-    setTimeout(flushWriteQueue, 5000); // retry
+    setTimeout(flushWriteQueue, 5000);
   }
 }
 
+// ── Видалення сторінки ─────────────────────────────────────
 async function fbDeletePage(id) {
-  if (!fbReady) return;
-  try { await db.collection('pages').doc(id).delete(); }
+  if (!fbReady || !currentUid) return;
+  try { await pagesCol().doc(id).delete(); }
   catch (e) { console.warn('Firestore delete error', e); }
 }
 
-// Real-time listener — the core of sync
-function subscribeFirestore() {
-  if (!fbReady) return;
-  if (fbUnsub) fbUnsub();
+// ── Перше завантаження з Firestore ────────────────────────
+async function loadFromFirestore() {
+  if (!fbReady || !currentUid) return;
+  setSyncStatus('syncing');
+  try {
+    const snap = await pagesCol().get();
+    if (!snap.empty) {
+      state.pages = {};
+      snap.forEach(doc => {
+        const d = doc.data();
+        state.pages[d.id || doc.id] = { ...d, id: d.id || doc.id };
+      });
+      ensureRoot();
+      saveLocalOnly();
+      renderTree();
+      if (state.activeId && state.pages[state.activeId]) openPage(state.activeId);
+      else openPage(ROOT_ID);
+    } else {
+      await uploadAllToFirestore();
+    }
+    setSyncStatus('synced');
+  } catch (e) {
+    console.warn('loadFromFirestore error', e);
+    setSyncStatus('error');
+  }
+}
 
-  fbUnsub = db.collection('pages').onSnapshot(
+// ── Вивантаження локальних даних ──────────────────────────
+async function uploadAllToFirestore() {
+  if (!fbReady || !currentUid) return;
+  const pages = Object.values(state.pages);
+  if (pages.length === 0) return;
+  setSyncStatus('syncing');
+  for (let i = 0; i < pages.length; i += 400) {
+    const batch = db.batch();
+    pages.slice(i, i + 400).forEach(p => batch.set(pagesCol().doc(p.id), p));
+    await batch.commit();
+  }
+  setSyncStatus('synced');
+}
+
+// ── Real-time підписка ─────────────────────────────────────
+function subscribeFirestore() {
+  if (!fbReady || !currentUid) return;
+  if (fbUnsub) fbUnsub();
+  fbUnsub = pagesCol().onSnapshot(
     { includeMetadataChanges: false },
     snap => {
-      let treeChanged = false;
+      let changed = false;
       snap.docChanges().forEach(change => {
         const remote = change.doc.data();
         const id = remote.id || change.doc.id;
-
+        if (!id) return;
         if (change.type === 'removed') {
-          if (id !== ROOT_ID && state.pages[id]) {
-            delete state.pages[id];
-            treeChanged = true;
-          }
+          if (id !== ROOT_ID && state.pages[id]) { delete state.pages[id]; changed = true; }
           return;
         }
-
-        // Skip updates for the page currently being edited
-        // to avoid cursor jumping while typing
         if (id === state.activeId && unsaved) return;
-
         const local = state.pages[id];
-        // Accept remote if: no local copy, or remote is newer
-        if (!local || remote.updatedAt > (local.updatedAt || 0)) {
+        if (!local || (remote.updatedAt || 0) > (local.updatedAt || 0)) {
           state.pages[id] = { ...remote, id };
-          treeChanged = true;
+          changed = true;
         }
       });
-
-      if (treeChanged) {
-        ensureRoot();
-        saveLocalOnly();
-        renderTree();
-        // If active page was updated remotely, reload editor
-        if (state.activeId && state.pages[state.activeId] && !unsaved) {
-          const pg = state.pages[state.activeId];
-          const fmt = resolveFormat(pg);
-          if (fmt !== activeFormat || getEditorContent() !== (pg.content || '')) {
-            reloadEditorContent(pg);
-          }
-        }
+      if (changed) {
+        ensureRoot(); saveLocalOnly(); renderTree();
+        if (state.activeId && state.pages[state.activeId] && !unsaved)
+          reloadEditorContent(state.pages[state.activeId]);
       }
       setSyncStatus('synced');
     },
     err => {
-      console.warn('Firestore snapshot error', err.code, err.message);
-      if (!navigator.onLine) { setSyncStatus('offline'); return; }
-      // Common causes: unauthorized domain, wrong rules, project not found
-      if (err.code === 'permission-denied') {
-        console.error('Firebase: перевір правила Firestore (дозволи) та авторизовані домени в Authentication → Settings');
-      }
-      setSyncStatus('error');
+      console.warn('Firestore error', err.code, err.message);
+      setSyncStatus(navigator.onLine ? 'error' : 'offline');
     }
   );
 }
 
-// Upload all local data to Firestore on first connect
-async function fbUploadAll() {
-  if (!fbReady) return;
-  setSyncStatus('syncing');
-  try {
-    // Firestore batch limit = 500 docs
-    const pages = Object.values(state.pages);
-    for (let i = 0; i < pages.length; i += 400) {
-      const batch = db.batch();
-      pages.slice(i, i + 400).forEach(p => {
-        batch.set(db.collection('pages').doc(p.id), p);
-      });
-      await batch.commit();
-    }
-    setSyncStatus('synced');
-  } catch (e) {
-    console.warn('Upload all error', e);
-    setSyncStatus('error');
-  }
-}
 
 // ══ LOCAL STORAGE ════════════════════════════════════════════
 function saveLocalOnly() {
@@ -845,6 +861,134 @@ setInterval(() => { if (writeQueue.size > 0) flushWriteQueue(); }, 10000);
 window.addEventListener('online',  () => { setSyncStatus('syncing'); flushWriteQueue(); });
 window.addEventListener('offline', () => setSyncStatus('offline'));
 
+// ══════════════════════════════════════════════════════════════
+//  AUTH UI
+// ══════════════════════════════════════════════════════════════
+
+function showAuthOverlay() {
+  document.getElementById('auth-overlay').classList.remove('hidden');
+  document.getElementById('app').style.visibility = 'hidden';
+}
+function hideAuthOverlay() {
+  document.getElementById('auth-overlay').classList.add('hidden');
+  document.getElementById('app').style.visibility = '';
+}
+function showUserBadge(user) {
+  // Remove existing badge if any
+  document.getElementById('user-badge')?.remove();
+  const div = document.createElement('div');
+  div.id = 'user-badge';
+  const email = user.email || user.displayName || 'Користувач';
+  div.innerHTML = `<span title="${email}">👤 ${email.split('@')[0]}</span>`;
+  const logoutBtn = document.createElement('button');
+  logoutBtn.id = 'btn-logout';
+  logoutBtn.textContent = 'Вийти';
+  logoutBtn.addEventListener('click', () => auth.signOut());
+  document.querySelector('.topbar-left').after(div);
+  div.after(logoutBtn);
+}
+function showAuthError(msg) {
+  const el = document.getElementById('auth-error');
+  el.textContent = msg; el.classList.remove('hidden');
+}
+function hideAuthError() { document.getElementById('auth-error').classList.add('hidden'); }
+function setAuthLoading(on) {
+  const loading = document.getElementById('auth-loading');
+  const formL   = document.getElementById('auth-form-login');
+  const formR   = document.getElementById('auth-form-reg');
+  if (on) {
+    loading.classList.remove('hidden'); loading.classList.add('flex');
+    formL.classList.add('hidden'); formR.classList.add('hidden');
+  } else {
+    loading.classList.add('hidden'); loading.classList.remove('flex');
+    formL.classList.remove('hidden');
+  }
+}
+
+// ── Auth event listeners ────────────────────────────────────
+document.getElementById('btn-login').addEventListener('click', async () => {
+  const email = document.getElementById('auth-email').value.trim();
+  const pass  = document.getElementById('auth-pass').value;
+  if (!email || !pass) { showAuthError('Введіть email і пароль'); return; }
+  hideAuthError(); setAuthLoading(true);
+  try {
+    await auth.signInWithEmailAndPassword(email, pass);
+  } catch (e) {
+    setAuthLoading(false);
+    const msgs = {
+      'auth/user-not-found':   'Акаунт не знайдено',
+      'auth/wrong-password':   'Невірний пароль',
+      'auth/invalid-email':    'Невірний формат email',
+      'auth/too-many-requests':'Забагато спроб. Спробуйте пізніше',
+      'auth/invalid-credential': 'Невірний email або пароль',
+    };
+    showAuthError(msgs[e.code] || e.message);
+  }
+});
+
+document.getElementById('btn-register').addEventListener('click', async () => {
+  const email = document.getElementById('reg-email').value.trim();
+  const pass  = document.getElementById('reg-pass').value;
+  if (!email || !pass) { showAuthError('Введіть email і пароль'); return; }
+  if (pass.length < 6)  { showAuthError('Пароль має бути мінімум 6 символів'); return; }
+  hideAuthError(); setAuthLoading(true);
+  try {
+    await auth.createUserWithEmailAndPassword(email, pass);
+  } catch (e) {
+    setAuthLoading(false);
+    const msgs = {
+      'auth/email-already-in-use':'Цей email вже використовується',
+      'auth/invalid-email':       'Невірний формат email',
+      'auth/weak-password':       'Пароль занадто простий',
+    };
+    showAuthError(msgs[e.code] || e.message);
+  }
+});
+
+document.getElementById('btn-google').addEventListener('click', async () => {
+  hideAuthError(); setAuthLoading(true);
+  try {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    await auth.signInWithPopup(provider);
+  } catch (e) {
+    setAuthLoading(false);
+    if (e.code !== 'auth/popup-closed-by-user') showAuthError(e.message);
+  }
+});
+
+document.getElementById('btn-forgot').addEventListener('click', async () => {
+  const email = document.getElementById('auth-email').value.trim();
+  if (!email) { showAuthError('Введіть email для відновлення пароля'); return; }
+  try {
+    await auth.sendPasswordResetEmail(email);
+    showAuthError('Лист надіслано на ' + email);
+    document.getElementById('auth-error').style.color = 'var(--success)';
+  } catch (e) { showAuthError(e.message); }
+});
+
+document.getElementById('btn-to-reg').addEventListener('click', () => {
+  hideAuthError();
+  document.getElementById('auth-form-login').classList.add('hidden');
+  document.getElementById('auth-form-reg').classList.remove('hidden');
+});
+document.getElementById('btn-to-login').addEventListener('click', () => {
+  hideAuthError();
+  document.getElementById('auth-form-reg').classList.add('hidden');
+  document.getElementById('auth-form-login').classList.remove('hidden');
+});
+
+// Enter key в полях
+['auth-email','auth-pass'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('btn-login').click();
+  });
+});
+['reg-email','reg-pass'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('btn-register').click();
+  });
+});
+
 // ══ INIT ═════════════════════════════════════════════════════
 loadState();
 ensureRoot();
@@ -856,15 +1000,10 @@ setSidebarOpen(localStorage.getItem(LS_SO) !== '0');
 applyLabels();
 if (expandState[ROOT_ID] === undefined) expandState[ROOT_ID] = true;
 
+// Render with local data first (instant display)
 renderTree();
 if (state.activeId && state.pages[state.activeId]) openPage(state.activeId);
 else openPage(ROOT_ID);
 
-// Init Firebase after page load
-window.addEventListener('load', () => {
-  setTimeout(() => {
-    initFirebase();
-    // If local data exists and FB just connected, upload it
-    if (Object.keys(state.pages).length > 1) fbUploadAll();
-  }, 600);
-});
+// Init Firebase (auth overlay shows automatically if not logged in)
+window.addEventListener('load', () => setTimeout(initFirebase, 400));

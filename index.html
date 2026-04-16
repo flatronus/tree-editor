@@ -116,11 +116,39 @@
 
 <input type="file" id="file-input" accept=".txt,.md,.html" style="display:none">
 
+<!-- Auth overlay -->
+<div id="auth-overlay">
+  <div id="auth-box">
+    <div class="auth-logo">Arkhiv</div>
+    <p class="auth-sub">Текстовий редактор</p>
+    <div id="auth-error" class="auth-error hidden"></div>
+    <div id="auth-form-login">
+      <input id="auth-email" type="email" placeholder="Email" autocomplete="email">
+      <input id="auth-pass"  type="password" placeholder="Пароль" autocomplete="current-password">
+      <button id="btn-login"    class="auth-btn primary">Увійти</button>
+      <button id="btn-to-reg"   class="auth-btn secondary">Створити акаунт</button>
+      <button id="btn-google"   class="auth-btn google">&#71; Увійти через Google</button>
+      <button id="btn-forgot"   class="auth-link">Забули пароль?</button>
+    </div>
+    <div id="auth-form-reg" class="hidden">
+      <input id="reg-email" type="email" placeholder="Email" autocomplete="email">
+      <input id="reg-pass"  type="password" placeholder="Пароль (мін. 6 символів)" autocomplete="new-password">
+      <button id="btn-register"  class="auth-btn primary">Зареєструватись</button>
+      <button id="btn-to-login"  class="auth-btn secondary">Вже є акаунт? Увійти</button>
+    </div>
+    <div id="auth-loading" class="hidden">
+      <div class="auth-spinner"></div>
+      <p>Вхід…</p>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 
-<!-- Firebase SDK v10 (modular, loaded as compat for simplicity) -->
+<!-- Firebase SDK (compat) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 
 <script src="app.js" defer></script>
