@@ -64,11 +64,9 @@ function initFirebase() {
 
 // Called when user is confirmed logged in
 function onLogin(user) {
-  // Show app, hide auth
   document.getElementById('auth-overlay').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
 
-  // Show email in topbar
   const badge = document.getElementById('user-email-badge');
   if (badge) {
     const name = user.displayName || user.email || '';
@@ -77,11 +75,9 @@ function onLogin(user) {
 
   setSyncStatus('syncing');
 
-  // Load from Firestore (remote always wins on login)
+  // Load remote data first, then subscribe to changes
   syncFromFirestore().then(() => {
-    // After initial load, subscribe to real-time changes
     subscribeFirestore();
-    setSyncStatus('synced');
   });
 }
 
@@ -143,37 +139,45 @@ async function batchUploadAll() {
 }
 
 // Real-time listener — catches changes made on OTHER devices
+let fbSnapshotReady = false; // true after initial snapshot processed
+
 function subscribeFirestore() {
   if (!fbReady || !currentUid) return;
   if (fbUnsub) fbUnsub();
+  fbSnapshotReady = false;
 
   fbUnsub = pagesCol().onSnapshot({ includeMetadataChanges: false }, snap => {
+    // First snapshot = initial state already loaded by syncFromFirestore → skip
+    if (!fbSnapshotReady) {
+      fbSnapshotReady = true;
+      setSyncStatus('synced');
+      return;
+    }
+
+    // Subsequent snapshots = real-time changes from other devices
     let changed = false;
     snap.docChanges().forEach(change => {
       const remote = { ...change.doc.data(), id: change.doc.id };
       const id = remote.id;
+      if (!id) return;
 
       if (change.type === 'removed') {
         if (id !== ROOT_ID && state.pages[id]) { delete state.pages[id]; changed = true; }
         return;
       }
 
-      // Don't overwrite the page currently being typed — causes cursor jump
+      // Don't overwrite the page actively being typed right now
       if (id === state.activeId && unsaved) return;
 
-      const local = state.pages[id];
-      // Accept remote version if newer
-      if (!local || (remote.updatedAt || 0) > (local.updatedAt || 0)) {
-        state.pages[id] = remote;
-        changed = true;
-      }
+      // Always accept remote changes (they come from other devices)
+      state.pages[id] = remote;
+      changed = true;
     });
 
     if (changed) {
       ensureRoot();
       saveLocalOnly();
       renderTree();
-      // Reload editor if active page changed remotely
       if (state.activeId && state.pages[state.activeId] && !unsaved) {
         reloadEditorContent(state.pages[state.activeId]);
       }
@@ -234,84 +238,23 @@ function setSyncStatus(s) {
 // ════════════════════════════════════════════════════════════
 function authError(msg) {
   const el = document.getElementById('auth-error');
-  el.textContent = msg; el.classList.remove('hidden');
-  el.style.color = '';
+  if (!el) return;
+  el.textContent = msg; el.classList.remove('hidden'); el.style.color = '';
 }
-function authClearError() { document.getElementById('auth-error').classList.add('hidden'); }
 
-document.getElementById('btn-login').addEventListener('click', async () => {
-  const email = document.getElementById('auth-email').value.trim();
-  const pass  = document.getElementById('auth-pass').value;
-  if (!email || !pass) { authError('Введіть email і пароль'); return; }
-  authClearError();
-  document.getElementById('btn-login').disabled = true;
-  try {
-    await auth.signInWithEmailAndPassword(email, pass);
-    // onAuthStateChanged handles the rest
-  } catch (e) {
-    document.getElementById('btn-login').disabled = false;
-    const m = { 'auth/user-not-found':'Акаунт не знайдено', 'auth/wrong-password':'Невірний пароль',
-                'auth/invalid-email':'Невірний email', 'auth/too-many-requests':'Забагато спроб',
-                'auth/invalid-credential':'Невірний email або пароль' };
-    authError(m[e.code] || e.message);
-  }
-});
-
-document.getElementById('btn-register').addEventListener('click', async () => {
-  const email = document.getElementById('reg-email').value.trim();
-  const pass  = document.getElementById('reg-pass').value;
-  if (!email || !pass) { authError('Введіть email і пароль'); return; }
-  if (pass.length < 6) { authError('Пароль мінімум 6 символів'); return; }
-  authClearError();
-  try {
-    await auth.createUserWithEmailAndPassword(email, pass);
-  } catch (e) {
-    const m = { 'auth/email-already-in-use':'Email вже використовується',
-                'auth/invalid-email':'Невірний email', 'auth/weak-password':'Пароль занадто простий' };
-    authError(m[e.code] || e.message);
-  }
-});
-
+// Google sign-in — only auth method
 document.getElementById('btn-google').addEventListener('click', async () => {
-  authClearError();
   try {
-    await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
+    const provider = new firebase.auth.GoogleAuthProvider();
+    await auth.signInWithPopup(provider);
+    // onAuthStateChanged handles everything after this
   } catch (e) {
     if (e.code !== 'auth/popup-closed-by-user') authError(e.message);
   }
 });
 
-document.getElementById('btn-forgot').addEventListener('click', async () => {
-  const email = document.getElementById('auth-email').value.trim();
-  if (!email) { authError('Введіть email для відновлення'); return; }
-  try {
-    await auth.sendPasswordResetEmail(email);
-    const el = document.getElementById('auth-error');
-    el.textContent = 'Лист надіслано на ' + email;
-    el.style.color = 'var(--success)'; el.classList.remove('hidden');
-  } catch (e) { authError(e.message); }
-});
-
-document.getElementById('btn-to-reg').addEventListener('click', () => {
-  authClearError();
-  document.getElementById('auth-form-login').classList.add('hidden');
-  document.getElementById('auth-form-reg').classList.remove('hidden');
-});
-document.getElementById('btn-to-login').addEventListener('click', () => {
-  authClearError();
-  document.getElementById('auth-form-reg').classList.add('hidden');
-  document.getElementById('auth-form-login').classList.remove('hidden');
-});
-
-['auth-email','auth-pass'].forEach(id =>
-  document.getElementById(id).addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('btn-login').click(); })
-);
-['reg-email','reg-pass'].forEach(id =>
-  document.getElementById(id).addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('btn-register').click(); })
-);
-
 document.getElementById('btn-logout').addEventListener('click', () => {
-  if (fbUnsub) fbUnsub();
+  if (fbUnsub) { fbUnsub(); fbUnsub = null; }
   auth.signOut();
 });
 
@@ -880,10 +823,20 @@ document.getElementById('btn-delete-page').addEventListener('click', () => {
 document.getElementById('btn-preview').addEventListener('click', togglePreview);
 
 document.getElementById('btn-new-page').addEventListener('click', () => {
+  // Save current page first, then reset unsaved to prevent double-save
   if (unsaved && state.activeId) saveCurrentEditorToPage();
+  unsaved = false;
+
+  // New page is child of current active page (or root)
   const parentId = state.activeId || ROOT_ID;
   const p = createPage(parentId);
-  expandState[parentId] = true;  // expand so child is visible
+
+  // Expand parent so child appears in tree
+  expandState[parentId] = true;
+
+  // Immediately write to Firestore (don't wait for queue)
+  flushWriteQueue();
+
   renderTree();
   openPage(p.id);
   setTimeout(() => document.getElementById('page-title').select(), 60);
