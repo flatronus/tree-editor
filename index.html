@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#4A90D9">
-<meta name="description" content="Arkhiv — текстовий редактор">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -18,29 +17,60 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div id="app">
+
+<!-- AUTH OVERLAY — shows by default, hidden after login -->
+<div id="auth-overlay">
+  <div id="auth-box">
+    <div class="auth-logo">Arkhiv</div>
+    <p class="auth-sub">Текстовий редактор</p>
+    <div id="auth-spinner-wrap">
+      <div class="auth-spinner"></div>
+      <p>Перевірка сесії…</p>
+    </div>
+    <div id="auth-forms" class="hidden">
+      <div id="auth-error" class="auth-error hidden"></div>
+      <div id="auth-form-login">
+        <input id="auth-email" type="email" placeholder="Email" autocomplete="email">
+        <input id="auth-pass"  type="password" placeholder="Пароль" autocomplete="current-password">
+        <button id="btn-login"   class="auth-btn primary">Увійти</button>
+        <button id="btn-to-reg"  class="auth-btn secondary">Створити акаунт</button>
+        <button id="btn-google"  class="auth-btn google">G&nbsp; Увійти через Google</button>
+        <button id="btn-forgot"  class="auth-link">Забули пароль?</button>
+      </div>
+      <div id="auth-form-reg" class="hidden">
+        <input id="reg-email" type="email" placeholder="Email" autocomplete="email">
+        <input id="reg-pass"  type="password" placeholder="Пароль (мін. 6 символів)" autocomplete="new-password">
+        <button id="btn-register"  class="auth-btn primary">Зареєструватись</button>
+        <button id="btn-to-login"  class="auth-btn secondary">← Вже є акаунт</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN APP — hidden until logged in -->
+<div id="app" class="hidden">
 
   <header id="global-topbar">
     <div class="topbar-left">
       <button id="btn-toggle-sidebar" class="icon-btn" title="Показати / сховати дерево"><span id="sidebar-arrow">&#8592;</span></button>
       <button id="btn-expand-labels"  class="icon-btn" title="Розгорнути назви в дереві">&#8801;</button>
       <button id="btn-new-page"       class="icon-btn" title="Нова сторінка (Ctrl+N)">+</button>
+      <button id="btn-delete-page"    class="icon-btn danger-icon" title="Видалити сторінку">&#10005;</button>
       <span class="logo">Arkhiv</span>
+      <span id="user-email-badge"></span>
     </div>
-    <div class="topbar-center" id="global-breadcrumb"></div>
     <div class="topbar-right">
-      <span id="status-sync" class="sync-badge"></span>
       <select id="format-select" title="Формат">
         <option value="auto">Авто</option>
         <option value="plain">Текст</option>
         <option value="markdown">Markdown</option>
         <option value="rich">Форматований</option>
       </select>
-      <button id="btn-preview"     class="action-btn" title="Перегляд"><span class="btn-icon">&#9654;</span><span class="btn-label"> Перегляд</span></button>
-      <button id="btn-import"      class="action-btn" title="Імпорт файлу"><span class="btn-icon">&#8681;</span><span class="btn-label"> Імпорт</span></button>
-      <button id="btn-export-pdf"  class="action-btn" title="Експорт PDF"><span class="btn-label">PDF</span></button>
-      <button id="btn-save"        class="action-btn primary" title="Зберегти (Ctrl+S)"><span class="btn-icon">&#128190;</span><span class="btn-label"> Зберегти</span></button>
-      <button id="btn-delete-page" class="action-btn danger"  title="Видалити сторінку">&#10005;</button>
+      <button id="btn-preview"    class="action-btn" title="Перегляд"><span class="btn-icon">&#9654;</span><span class="btn-label">&nbsp;Перегляд</span></button>
+      <button id="btn-import"     class="action-btn" title="Імпорт файлу"><span class="btn-icon">&#8681;</span><span class="btn-label">&nbsp;Імпорт</span></button>
+      <button id="btn-export-pdf" class="action-btn" title="Експорт PDF"><span class="btn-label">PDF</span></button>
+      <button id="btn-save"       class="action-btn primary" title="Зберегти і синхронізувати (Ctrl+S)"><span class="btn-icon">&#128190;</span><span class="btn-label">&nbsp;Зберегти</span></button>
+      <button id="btn-logout"     class="action-btn" title="Вийти">&#8594;&nbsp;Вийти</button>
     </div>
   </header>
 
@@ -61,7 +91,6 @@
       </div>
 
       <div id="editor-wrap" class="hidden">
-        <div id="breadcrumb-bar"></div>
         <div id="editor-titlebar">
           <input id="page-title" type="text" placeholder="Назва сторінки..." spellcheck="true">
         </div>
@@ -89,7 +118,8 @@
         <div id="editor-statusbar">
           <span id="status-format">Формат: Авто</span>
           <span id="status-words">0 слів</span>
-          <span id="status-saved">&#9679; збережено</span>
+          <span id="breadcrumb-bar"></span>
+          <span id="status-sync" class="sync-badge"></span>
         </div>
       </div>
     </main>
@@ -116,51 +146,19 @@
 
 <input type="file" id="file-input" accept=".txt,.md,.html" style="display:none">
 
-<!-- Auth overlay -->
-<div id="auth-overlay">
-  <div id="auth-box">
-    <div class="auth-logo">Arkhiv</div>
-    <p class="auth-sub">Текстовий редактор</p>
-    <div id="auth-error" class="auth-error hidden"></div>
-    <div id="auth-form-login">
-      <input id="auth-email" type="email" placeholder="Email" autocomplete="email">
-      <input id="auth-pass"  type="password" placeholder="Пароль" autocomplete="current-password">
-      <button id="btn-login"    class="auth-btn primary">Увійти</button>
-      <button id="btn-to-reg"   class="auth-btn secondary">Створити акаунт</button>
-      <button id="btn-google"   class="auth-btn google">&#71; Увійти через Google</button>
-      <button id="btn-forgot"   class="auth-link">Забули пароль?</button>
-    </div>
-    <div id="auth-form-reg" class="hidden">
-      <input id="reg-email" type="email" placeholder="Email" autocomplete="email">
-      <input id="reg-pass"  type="password" placeholder="Пароль (мін. 6 символів)" autocomplete="new-password">
-      <button id="btn-register"  class="auth-btn primary">Зареєструватись</button>
-      <button id="btn-to-login"  class="auth-btn secondary">Вже є акаунт? Увійти</button>
-    </div>
-    <div id="auth-loading" class="hidden">
-      <div class="auth-spinner"></div>
-      <p>Вхід…</p>
-    </div>
-  </div>
-</div>
-
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-
-<!-- Firebase SDK (compat) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-
 <script src="app.js" defer></script>
 <script>
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.js').then(reg => {
-    setInterval(() => reg.update(), 60000);
-  }).catch(() => {});
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
   if (new URLSearchParams(location.search).get('new') === '1') {
     window.addEventListener('load', () => {
       history.replaceState({}, '', location.pathname);
-      setTimeout(() => document.getElementById('btn-new-page')?.click(), 800);
+      setTimeout(() => document.getElementById('btn-new-page')?.click(), 1200);
     });
   }
 }

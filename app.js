@@ -1,14 +1,14 @@
 // ════════════════════════════════════════════════════════════
-//  ARKHIV  —  app.js
+//  ARKHIV — app.js
 // ════════════════════════════════════════════════════════════
 
-const ROOT_ID  = '__root__';
-const LS_KEY   = 'arkhiv_v3';
-const LS_SW    = 'arkhiv-sidebar-w';
-const LS_SO    = 'arkhiv-sidebar-open';
-const LS_LBLS  = 'arkhiv-labels';
+const ROOT_ID = '__root__';
+const LS_KEY  = 'arkhiv_v3';
+const LS_SW   = 'arkhiv-sidebar-w';
+const LS_SO   = 'arkhiv-sidebar-open';
+const LS_LBL  = 'arkhiv-labels';
 
-// ══ FIREBASE CONFIG (вбудований) ═══════════════════════════
+// ── Firebase config ─────────────────────────────────────────
 const FB_CONFIG = {
   apiKey:            "AIzaSyAQDvjtD4mmBS6r4TYqfq_SPYPL-7QVGwg",
   authDomain:        "notes-app-b58f8.firebaseapp.com",
@@ -18,140 +18,121 @@ const FB_CONFIG = {
   appId:             "1:184097835729:web:2231b0e0f8d1a6af20d3f0"
 };
 
-// ══ STATE ═══════════════════════════════════════════════════
-let state = { pages: {}, activeId: null };
-let unsaved       = false;
-let activeFormat  = 'plain';
+// ── App state ───────────────────────────────────────────────
+let state        = { pages: {}, activeId: null };
+let unsaved      = false;
+let activeFormat = 'plain';
 let previewActive = false;
 const expandState = {};
 
-// ══════════════════════════════════════════════════════════════
-//  FIREBASE — Auth + Firestore
-//  Шлях: users/{uid}/pages/{pageId}  — відповідає правилам БД
-// ══════════════════════════════════════════════════════════════
+// ── Firebase handles ────────────────────────────────────────
 let db         = null;
 let auth       = null;
 let currentUid = null;
 let fbReady    = false;
 let fbUnsub    = null;
+
+// Write queue — batched writes to Firestore
 const writeQueue = new Set();
 let writeTimer   = null;
 
-// Шлях до колекції сторінок поточного юзера
+// ════════════════════════════════════════════════════════════
+//  FIREBASE INIT
+// ════════════════════════════════════════════════════════════
+function initFirebase() {
+  if (!firebase.apps.length) firebase.initializeApp(FB_CONFIG);
+  db   = firebase.firestore();
+  auth = firebase.auth();
+
+  // Offline persistence (works even without internet)
+  db.enablePersistence({ synchronizeTabs: true }).catch(() => {});
+
+  // This is the single source of truth for auth state
+  // It fires once immediately on load with the cached session
+  auth.onAuthStateChanged(user => {
+    if (user) {
+      currentUid = user.uid;
+      fbReady    = true;
+      onLogin(user);
+    } else {
+      currentUid = null;
+      fbReady    = false;
+      onLogout();
+    }
+  });
+}
+
+// Called when user is confirmed logged in
+function onLogin(user) {
+  // Show app, hide auth
+  document.getElementById('auth-overlay').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+
+  // Show email in topbar
+  const badge = document.getElementById('user-email-badge');
+  if (badge) {
+    const name = user.displayName || user.email || '';
+    badge.textContent = name ? '· ' + (name.includes('@') ? name.split('@')[0] : name) : '';
+  }
+
+  setSyncStatus('syncing');
+
+  // Load from Firestore (remote always wins on login)
+  syncFromFirestore().then(() => {
+    // After initial load, subscribe to real-time changes
+    subscribeFirestore();
+    setSyncStatus('synced');
+  });
+}
+
+function onLogout() {
+  if (fbUnsub) { fbUnsub(); fbUnsub = null; }
+  document.getElementById('app').classList.add('hidden');
+  document.getElementById('auth-overlay').classList.remove('hidden');
+  // Show login form (not spinner)
+  document.getElementById('auth-spinner-wrap').classList.add('hidden');
+  document.getElementById('auth-forms').classList.remove('hidden');
+}
+
+// ════════════════════════════════════════════════════════════
+//  FIRESTORE — user-scoped path: users/{uid}/pages/{id}
+// ════════════════════════════════════════════════════════════
 function pagesCol() {
   return db.collection('users').doc(currentUid).collection('pages');
 }
 
-// ── Ініціалізація Firebase ──────────────────────────────────
-function initFirebase() {
-  try {
-    if (!firebase.apps.length) firebase.initializeApp(FB_CONFIG);
-    db   = firebase.firestore();
-    auth = firebase.auth();
-    db.enablePersistence({ synchronizeTabs: true }).catch(e => {
-      if (e.code !== 'failed-precondition') console.warn('Persistence:', e);
-    });
-    auth.onAuthStateChanged(onAuthStateChanged);
-  } catch (e) {
-    console.error('Firebase init failed', e);
-    setSyncStatus('error');
-  }
-}
-
-// ── Реакція на вхід / вихід ────────────────────────────────
-function onAuthStateChanged(user) {
-  if (user) {
-    currentUid = user.uid;
-    fbReady    = true;
-    hideAuthOverlay();
-    showUserBadge(user);
-    setSyncStatus('synced');
-    loadFromFirestore();
-    subscribeFirestore();
-  } else {
-    currentUid = null;
-    fbReady    = false;
-    if (fbUnsub) { fbUnsub(); fbUnsub = null; }
-    setSyncStatus('offline');
-    showAuthOverlay();
-  }
-}
-
-// ── Показ статусу ──────────────────────────────────────────
-function setSyncStatus(s) {
-  const el = document.getElementById('status-sync');
-  if (!el) return;
-  const map = { syncing:'↻ синхронізація…', synced:'☁ синхронізовано', offline:'○ офлайн', error:'⚠ помилка' };
-  el.textContent = map[s] || '';
-  el.className = 'sync-badge ' + s;
-}
-
-// ── Запис сторінки ─────────────────────────────────────────
-function fbQueueWrite(page) {
+// Full sync: download ALL pages from Firestore, replace local state
+async function syncFromFirestore() {
   if (!fbReady || !currentUid) return;
-  writeQueue.add(page.id);
-  clearTimeout(writeTimer);
-  writeTimer = setTimeout(flushWriteQueue, 800);
-}
-
-async function flushWriteQueue() {
-  if (!fbReady || !currentUid || writeQueue.size === 0) return;
-  setSyncStatus('syncing');
   try {
-    const batch = db.batch();
-    for (const id of writeQueue) {
-      const page = state.pages[id];
-      if (page) batch.set(pagesCol().doc(id), page);
-    }
-    writeQueue.clear();
-    await batch.commit();
-    setSyncStatus('synced');
-  } catch (e) {
-    console.warn('Firestore write error', e);
-    setSyncStatus('error');
-    setTimeout(flushWriteQueue, 5000);
-  }
-}
-
-// ── Видалення сторінки ─────────────────────────────────────
-async function fbDeletePage(id) {
-  if (!fbReady || !currentUid) return;
-  try { await pagesCol().doc(id).delete(); }
-  catch (e) { console.warn('Firestore delete error', e); }
-}
-
-// ── Перше завантаження з Firestore ────────────────────────
-async function loadFromFirestore() {
-  if (!fbReady || !currentUid) return;
-  setSyncStatus('syncing');
-  try {
-    const snap = await pagesCol().get();
+    const snap = await pagesCol().orderBy('updatedAt', 'desc').get();
     if (!snap.empty) {
-      state.pages = {};
+      // Remote has data — use it as source of truth
+      const newPages = {};
       snap.forEach(doc => {
-        const d = doc.data();
-        state.pages[d.id || doc.id] = { ...d, id: d.id || doc.id };
+        const d = { ...doc.data(), id: doc.id };
+        newPages[doc.id] = d;
       });
+      state.pages = newPages;
       ensureRoot();
       saveLocalOnly();
       renderTree();
       if (state.activeId && state.pages[state.activeId]) openPage(state.activeId);
       else openPage(ROOT_ID);
     } else {
-      await uploadAllToFirestore();
+      // Firestore empty — upload local data
+      await batchUploadAll();
     }
-    setSyncStatus('synced');
   } catch (e) {
-    console.warn('loadFromFirestore error', e);
+    console.warn('syncFromFirestore error', e);
     setSyncStatus('error');
   }
 }
 
-// ── Вивантаження локальних даних ──────────────────────────
-async function uploadAllToFirestore() {
-  if (!fbReady || !currentUid) return;
+// Upload all local pages to Firestore in batches
+async function batchUploadAll() {
   const pages = Object.values(state.pages);
-  if (pages.length === 0) return;
+  if (!pages.length) return;
   setSyncStatus('syncing');
   for (let i = 0; i < pages.length; i += 400) {
     const batch = db.batch();
@@ -161,89 +142,218 @@ async function uploadAllToFirestore() {
   setSyncStatus('synced');
 }
 
-// ── Real-time підписка ─────────────────────────────────────
+// Real-time listener — catches changes made on OTHER devices
 function subscribeFirestore() {
   if (!fbReady || !currentUid) return;
   if (fbUnsub) fbUnsub();
-  fbUnsub = pagesCol().onSnapshot(
-    { includeMetadataChanges: false },
-    snap => {
-      let changed = false;
-      snap.docChanges().forEach(change => {
-        const remote = change.doc.data();
-        const id = remote.id || change.doc.id;
-        if (!id) return;
-        if (change.type === 'removed') {
-          if (id !== ROOT_ID && state.pages[id]) { delete state.pages[id]; changed = true; }
-          return;
-        }
-        if (id === state.activeId && unsaved) return;
-        const local = state.pages[id];
-        if (!local || (remote.updatedAt || 0) > (local.updatedAt || 0)) {
-          state.pages[id] = { ...remote, id };
-          changed = true;
-        }
-      });
-      if (changed) {
-        ensureRoot(); saveLocalOnly(); renderTree();
-        if (state.activeId && state.pages[state.activeId] && !unsaved)
-          reloadEditorContent(state.pages[state.activeId]);
+
+  fbUnsub = pagesCol().onSnapshot({ includeMetadataChanges: false }, snap => {
+    let changed = false;
+    snap.docChanges().forEach(change => {
+      const remote = { ...change.doc.data(), id: change.doc.id };
+      const id = remote.id;
+
+      if (change.type === 'removed') {
+        if (id !== ROOT_ID && state.pages[id]) { delete state.pages[id]; changed = true; }
+        return;
       }
-      setSyncStatus('synced');
-    },
-    err => {
-      console.warn('Firestore error', err.code, err.message);
-      setSyncStatus(navigator.onLine ? 'error' : 'offline');
+
+      // Don't overwrite the page currently being typed — causes cursor jump
+      if (id === state.activeId && unsaved) return;
+
+      const local = state.pages[id];
+      // Accept remote version if newer
+      if (!local || (remote.updatedAt || 0) > (local.updatedAt || 0)) {
+        state.pages[id] = remote;
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      ensureRoot();
+      saveLocalOnly();
+      renderTree();
+      // Reload editor if active page changed remotely
+      if (state.activeId && state.pages[state.activeId] && !unsaved) {
+        reloadEditorContent(state.pages[state.activeId]);
+      }
     }
-  );
+    setSyncStatus('synced');
+
+  }, err => {
+    console.warn('Firestore snapshot error', err.code);
+    setSyncStatus(navigator.onLine ? 'error' : 'offline');
+  });
 }
 
+// Queue a page write — flushed in batch after 600ms idle
+function fbQueueWrite(page) {
+  if (!fbReady || !currentUid) return;
+  writeQueue.add(page.id);
+  clearTimeout(writeTimer);
+  writeTimer = setTimeout(flushWriteQueue, 600);
+}
 
-// ══ LOCAL STORAGE ════════════════════════════════════════════
+async function flushWriteQueue() {
+  if (!fbReady || !currentUid || !writeQueue.size) return;
+  setSyncStatus('syncing');
+  const ids = [...writeQueue];
+  writeQueue.clear();
+  try {
+    const batch = db.batch();
+    ids.forEach(id => {
+      const p = state.pages[id];
+      if (p) batch.set(pagesCol().doc(id), p);
+    });
+    await batch.commit();
+    setSyncStatus('synced');
+  } catch (e) {
+    console.warn('flushWriteQueue error', e);
+    // Re-queue on failure
+    ids.forEach(id => writeQueue.add(id));
+    setSyncStatus('error');
+    setTimeout(flushWriteQueue, 5000);
+  }
+}
+
+async function fbDeletePage(id) {
+  if (!fbReady || !currentUid) return;
+  try { await pagesCol().doc(id).delete(); } catch (e) { console.warn(e); }
+}
+
+function setSyncStatus(s) {
+  const el = document.getElementById('status-sync');
+  if (!el) return;
+  const map = { syncing: '↻ синхронізація…', synced: '☁ синхронізовано', offline: '○ офлайн', error: '⚠ помилка' };
+  el.textContent = map[s] || '';
+  el.className = 'sync-badge ' + s;
+}
+
+// ════════════════════════════════════════════════════════════
+//  AUTH UI
+// ════════════════════════════════════════════════════════════
+function authError(msg) {
+  const el = document.getElementById('auth-error');
+  el.textContent = msg; el.classList.remove('hidden');
+  el.style.color = '';
+}
+function authClearError() { document.getElementById('auth-error').classList.add('hidden'); }
+
+document.getElementById('btn-login').addEventListener('click', async () => {
+  const email = document.getElementById('auth-email').value.trim();
+  const pass  = document.getElementById('auth-pass').value;
+  if (!email || !pass) { authError('Введіть email і пароль'); return; }
+  authClearError();
+  document.getElementById('btn-login').disabled = true;
+  try {
+    await auth.signInWithEmailAndPassword(email, pass);
+    // onAuthStateChanged handles the rest
+  } catch (e) {
+    document.getElementById('btn-login').disabled = false;
+    const m = { 'auth/user-not-found':'Акаунт не знайдено', 'auth/wrong-password':'Невірний пароль',
+                'auth/invalid-email':'Невірний email', 'auth/too-many-requests':'Забагато спроб',
+                'auth/invalid-credential':'Невірний email або пароль' };
+    authError(m[e.code] || e.message);
+  }
+});
+
+document.getElementById('btn-register').addEventListener('click', async () => {
+  const email = document.getElementById('reg-email').value.trim();
+  const pass  = document.getElementById('reg-pass').value;
+  if (!email || !pass) { authError('Введіть email і пароль'); return; }
+  if (pass.length < 6) { authError('Пароль мінімум 6 символів'); return; }
+  authClearError();
+  try {
+    await auth.createUserWithEmailAndPassword(email, pass);
+  } catch (e) {
+    const m = { 'auth/email-already-in-use':'Email вже використовується',
+                'auth/invalid-email':'Невірний email', 'auth/weak-password':'Пароль занадто простий' };
+    authError(m[e.code] || e.message);
+  }
+});
+
+document.getElementById('btn-google').addEventListener('click', async () => {
+  authClearError();
+  try {
+    await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
+  } catch (e) {
+    if (e.code !== 'auth/popup-closed-by-user') authError(e.message);
+  }
+});
+
+document.getElementById('btn-forgot').addEventListener('click', async () => {
+  const email = document.getElementById('auth-email').value.trim();
+  if (!email) { authError('Введіть email для відновлення'); return; }
+  try {
+    await auth.sendPasswordResetEmail(email);
+    const el = document.getElementById('auth-error');
+    el.textContent = 'Лист надіслано на ' + email;
+    el.style.color = 'var(--success)'; el.classList.remove('hidden');
+  } catch (e) { authError(e.message); }
+});
+
+document.getElementById('btn-to-reg').addEventListener('click', () => {
+  authClearError();
+  document.getElementById('auth-form-login').classList.add('hidden');
+  document.getElementById('auth-form-reg').classList.remove('hidden');
+});
+document.getElementById('btn-to-login').addEventListener('click', () => {
+  authClearError();
+  document.getElementById('auth-form-reg').classList.add('hidden');
+  document.getElementById('auth-form-login').classList.remove('hidden');
+});
+
+['auth-email','auth-pass'].forEach(id =>
+  document.getElementById(id).addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('btn-login').click(); })
+);
+['reg-email','reg-pass'].forEach(id =>
+  document.getElementById(id).addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('btn-register').click(); })
+);
+
+document.getElementById('btn-logout').addEventListener('click', () => {
+  if (fbUnsub) fbUnsub();
+  auth.signOut();
+});
+
+// ════════════════════════════════════════════════════════════
+//  LOCAL STORAGE
+// ════════════════════════════════════════════════════════════
 function saveLocalOnly() {
   try { localStorage.setItem(LS_KEY, JSON.stringify({ pages: state.pages, activeId: state.activeId })); }
-  catch (e) { console.warn('localStorage write error', e); }
+  catch (e) { console.warn(e); }
 }
-
-function saveState() {
-  saveLocalOnly();
-}
+function saveState() { saveLocalOnly(); }
 
 function loadState() {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    if (raw) {
-      const p = JSON.parse(raw);
-      state.pages    = p.pages    || {};
-      state.activeId = p.activeId || null;
-    }
-  } catch (e) { console.warn('Load error', e); }
+    if (raw) { const p = JSON.parse(raw); state.pages = p.pages || {}; state.activeId = p.activeId || null; }
+  } catch (e) { console.warn(e); }
 }
 
-// ══ HELPERS ══════════════════════════════════════════════════
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
 function ensureRoot() {
   if (!state.pages[ROOT_ID]) {
-    state.pages[ROOT_ID] = {
-      id: ROOT_ID, title: 'Мій архів', content: '',
-      format: 'plain', parentId: null, children: [],
-      createdAt: Date.now(), updatedAt: Date.now(),
-    };
+    state.pages[ROOT_ID] = { id: ROOT_ID, title: 'Мій архів', content: '', format: 'plain', parentId: null, children: [], createdAt: Date.now(), updatedAt: Date.now() };
   }
+  // Ensure children array exists on all pages
+  Object.values(state.pages).forEach(p => { if (!Array.isArray(p.children)) p.children = []; });
 }
 
-// ══ PAGE CRUD ════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
+//  PAGE CRUD
+// ════════════════════════════════════════════════════════════
 function createPage(parentId) {
   const id = uid();
-  const page = {
-    id, title: 'Без назви', content: '', format: 'auto',
-    parentId, children: [], createdAt: Date.now(), updatedAt: Date.now(),
-  };
+  const page = { id, title: 'Без назви', content: '', format: 'auto', parentId, children: [], createdAt: Date.now(), updatedAt: Date.now() };
   state.pages[id] = page;
-  if (state.pages[parentId]) {
-    state.pages[parentId].children.push(id);
-    fbQueueWrite(state.pages[parentId]);
+  const parent = state.pages[parentId];
+  if (parent) {
+    if (!Array.isArray(parent.children)) parent.children = [];
+    parent.children.push(id);
+    parent.updatedAt = Date.now();
+    fbQueueWrite(parent);
   }
   saveState();
   fbQueueWrite(page);
@@ -252,14 +362,10 @@ function createPage(parentId) {
 
 function deletePage(id) {
   if (id === ROOT_ID) return;
-  const page = state.pages[id];
-  if (!page) return;
+  const page = state.pages[id]; if (!page) return;
   [...(page.children || [])].forEach(deletePage);
   const parent = state.pages[page.parentId];
-  if (parent) {
-    parent.children = parent.children.filter(c => c !== id);
-    fbQueueWrite(parent);
-  }
+  if (parent) { parent.children = parent.children.filter(c => c !== id); parent.updatedAt = Date.now(); fbQueueWrite(parent); }
   fbDeletePage(id);
   delete state.pages[id];
   saveState();
@@ -267,39 +373,36 @@ function deletePage(id) {
 
 function duplicatePage(id) {
   if (id === ROOT_ID) return null;
-  const src = state.pages[id];
-  if (!src) return null;
+  const src = state.pages[id]; if (!src) return null;
   const np = createPage(src.parentId);
-  np.title   = src.title + ' (копія)';
-  np.content = src.content;
-  np.format  = src.format;
-  saveState();
-  fbQueueWrite(np);
+  np.title = src.title + ' (копія)'; np.content = src.content; np.format = src.format;
+  np.updatedAt = Date.now();
+  saveState(); fbQueueWrite(np);
   return np;
 }
 
-// ══ FORMAT ═══════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
+//  FORMAT
+// ════════════════════════════════════════════════════════════
 function detectFormat(text) {
   if (!text || !text.trim()) return 'plain';
   let md = 0;
   for (const l of text.split('\n')) {
-    if (/^#{1,6}\s/.test(l))    md += 3;
-    if (/^\s*[-*+]\s/.test(l))  md += 2;
-    if (/^\s*\d+\.\s/.test(l))  md += 2;
-    if (/\*\*|__/.test(l))      md += 1;
+    if (/^#{1,6}\s/.test(l)) md += 3;
+    if (/^\s*[-*+]\s/.test(l)) md += 2;
+    if (/^\s*\d+\.\s/.test(l)) md += 2;
+    if (/\*\*|__/.test(l)) md += 1;
     if (/\[.+\]\(.+\)/.test(l)) md += 2;
-    if (/^```|^>/.test(l))      md += 3;
+    if (/^```|^> /.test(l)) md += 3;
   }
-  const htmlN = (text.match(/<[a-z][a-z0-9]*[\s>]/gi) || []).length;
-  if (htmlN > 3) return 'rich';
-  if (md >= 4)   return 'markdown';
-  return 'plain';
+  if ((text.match(/<[a-z][a-z0-9]*[\s>]/gi) || []).length > 3) return 'rich';
+  return md >= 4 ? 'markdown' : 'plain';
 }
-function resolveFormat(page) {
-  return page.format !== 'auto' ? page.format : detectFormat(page.content);
-}
+function resolveFormat(page) { return page.format !== 'auto' ? page.format : detectFormat(page.content); }
 
-// ══ SUBTREE ═══════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
+//  TREE HELPERS
+// ════════════════════════════════════════════════════════════
 function collectSubtree(id) {
   const p = state.pages[id]; if (!p) return [];
   return [p, ...(p.children || []).flatMap(c => collectSubtree(c))];
@@ -309,8 +412,6 @@ function isInSubtree(targetId, rootId) {
   const p = state.pages[rootId]; if (!p) return false;
   return (p.children || []).some(c => isInSubtree(targetId, c));
 }
-
-// ══ BREADCRUMB ════════════════════════════════════════════════
 function getBreadcrumb(id) {
   const parts = []; let cur = state.pages[id];
   while (cur) { parts.unshift(cur.title); cur = cur.parentId ? state.pages[cur.parentId] : null; }
@@ -318,12 +419,12 @@ function getBreadcrumb(id) {
 }
 function updateBreadcrumb(id) {
   const bc = getBreadcrumb(id);
-  ['breadcrumb-bar', 'global-breadcrumb'].forEach(eid => {
-    const el = document.getElementById(eid); if (el) el.textContent = bc;
-  });
+  const el = document.getElementById('breadcrumb-bar'); if (el) el.textContent = bc;
 }
 
-// ══ RENDER TREE ══════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
+//  RENDER TREE
+// ════════════════════════════════════════════════════════════
 function renderTree() {
   const treeEl = document.getElementById('tree-root');
   treeEl.innerHTML = '';
@@ -331,10 +432,11 @@ function renderTree() {
 
   function buildNode(id, depth) {
     const page = state.pages[id]; if (!page) return null;
-    const hasKids   = !!(page.children && page.children.length);
+    const children = page.children || [];
+    const hasKids = children.length > 0;
     const matchTitle = page.title.toLowerCase().includes(q);
-    const childNodes = hasKids ? page.children.map(c => buildNode(c, depth + 1)).filter(Boolean) : [];
-    if (q && !matchTitle && childNodes.length === 0) return null;
+    const childNodes = children.map(c => buildNode(c, depth + 1)).filter(Boolean);
+    if (q && !matchTitle && !childNodes.length) return null;
 
     const item = document.createElement('div');
     item.className = 'tree-item';
@@ -343,7 +445,7 @@ function renderTree() {
     row.className = 'tree-row' + (state.activeId === id ? ' active' : '');
     row.dataset.id = id;
     row.style.paddingLeft = (4 + depth * 13) + 'px';
-    row.title = page.title; // tooltip with full title
+    row.title = page.title;
 
     // Toggle
     const toggle = document.createElement('span');
@@ -386,34 +488,36 @@ function renderTree() {
     return item;
   }
 
-  const rootNode = buildNode(ROOT_ID, 0);
-  if (rootNode) treeEl.appendChild(rootNode);
+  const root = buildNode(ROOT_ID, 0);
+  if (root) treeEl.appendChild(root);
 }
 
-// ══ LABELS TOGGLE ════════════════════════════════════════════
-let labelsExpanded = localStorage.getItem(LS_LBLS) === '1';
+// ════════════════════════════════════════════════════════════
+//  LABELS TOGGLE
+// ════════════════════════════════════════════════════════════
+let labelsExpanded = localStorage.getItem(LS_LBL) === '1';
 function applyLabels() {
   document.body.classList.toggle('labels-expanded', labelsExpanded);
-  const btn = document.getElementById('btn-expand-labels');
-  if (btn) btn.classList.toggle('active', labelsExpanded);
+  document.getElementById('btn-expand-labels')?.classList.toggle('active', labelsExpanded);
 }
 document.getElementById('btn-expand-labels').addEventListener('click', () => {
   labelsExpanded = !labelsExpanded;
-  localStorage.setItem(LS_LBLS, labelsExpanded ? '1' : '0');
+  localStorage.setItem(LS_LBL, labelsExpanded ? '1' : '0');
   applyLabels();
 });
 
-// ══ PAGE ACTIONS POPUP ═══════════════════════════════════════
+// ════════════════════════════════════════════════════════════
+//  PAGE ACTIONS POPUP
+// ════════════════════════════════════════════════════════════
 function showPageActions(id, anchor) {
   document.querySelectorAll('.page-action-popup').forEach(el => el.remove());
   const popup = document.createElement('div');
   popup.className = 'page-action-popup';
   const pages = collectSubtree(id);
-  const sub = pages.length === 1 ? 'лише ця сторінка' : `${pages.length} сторінок у гілці`;
   popup.innerHTML = `
     <div class="popup-title">${state.pages[id]?.title || ''}</div>
-    <div class="popup-sub">${sub}</div>
-    <button data-act="save">💾 Зберегти гілку</button>
+    <div class="popup-sub">${pages.length === 1 ? 'лише ця сторінка' : pages.length + ' сторінок у гілці'}</div>
+    <button data-act="save">💾 Зберегти і синхронізувати</button>
     <button data-act="pdf">📑 Експорт у PDF</button>
     <button data-act="txt">📃 Експорт у TXT</button>`;
   document.body.appendChild(popup);
@@ -422,31 +526,25 @@ function showPageActions(id, anchor) {
   popup.addEventListener('click', e => {
     const btn = e.target.closest('button'); if (!btn) return;
     popup.remove();
-    const act = btn.dataset.act;
-    if (act === 'save') saveBranch(id);
-    else if (act === 'pdf') exportBranchPDF(id);
-    else if (act === 'txt') exportBranchTXT(id);
+    if (btn.dataset.act === 'save') { saveBranch(id); }
+    else if (btn.dataset.act === 'pdf') exportBranchPDF(id);
+    else if (btn.dataset.act === 'txt') exportBranchTXT(id);
   });
-  setTimeout(() => {
-    document.addEventListener('click', function h() { popup.remove(); document.removeEventListener('click', h); });
-  }, 0);
+  setTimeout(() => document.addEventListener('click', function h() { popup.remove(); document.removeEventListener('click', h); }), 0);
 }
 
 function saveBranch(id) {
   if (state.activeId && isInSubtree(state.activeId, id)) saveCurrentEditorToPage();
   collectSubtree(id).forEach(p => fbQueueWrite(p));
   flushWriteQueue();
-  flashStatus('Гілку збережено ✓');
 }
 
-// ══ EXPORT ════════════════════════════════════════════════════
-function pageContentToHtml(page) {
+// ════════════════════════════════════════════════════════════
+//  EXPORT
+// ════════════════════════════════════════════════════════════
+function pageToHtml(page) {
   const fmt = resolveFormat(page);
-  if (fmt === 'markdown') {
-    return typeof marked !== 'undefined'
-      ? marked.parse(page.content || '')
-      : (page.content || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>');
-  }
+  if (fmt === 'markdown') return typeof marked !== 'undefined' ? marked.parse(page.content || '') : (page.content || '').replace(/\n/g, '<br>');
   if (fmt === 'rich') return page.content || '';
   return '<pre>' + (page.content || '').replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</pre>';
 }
@@ -454,51 +552,36 @@ function pageContentToHtml(page) {
 function exportBranchPDF(id) {
   const pages = collectSubtree(id);
   const styles = `<style>
-    @import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;1,400&family=Playfair+Display:wght@400;500&display=swap');
-    body{font-family:'Lora',Georgia,serif;color:#111;font-size:11pt;line-height:1.75;margin:0;padding:0;background:#fff}
-    h1{font-family:'Playfair Display',serif;font-size:15pt;font-weight:500;color:#1a1a2e;margin:14pt 0 3pt;border-bottom:1pt solid #4A90D9;padding-bottom:3pt}
-    h2{font-family:'Playfair Display',serif;font-size:13pt;font-weight:500;color:#2563a8;margin:11pt 0 3pt}
-    h3{font-family:'Playfair Display',serif;font-size:11pt;font-weight:500;color:#4a5568;margin:8pt 0 2pt}
-    p{margin:4pt 0}ul,ol{padding-left:16pt;margin:4pt 0}li{margin:1pt 0}
-    pre{background:#f5f7fa;border:0.5pt solid #e2e8f0;border-radius:3pt;padding:6pt 9pt;white-space:pre-wrap;font-size:9pt;font-family:monospace;line-height:1.5;margin:5pt 0}
-    code{background:#f0f2f5;padding:1pt 3pt;border-radius:2pt;font-family:monospace;font-size:9pt;color:#c7254e}
-    blockquote{border-left:2pt solid #4A90D9;margin:6pt 0;padding:1pt 0 1pt 9pt;color:#4a5568;font-style:italic}
-    a{color:#2563a8}table{width:100%;border-collapse:collapse;margin:6pt 0;font-size:10pt}
-    th{background:#eef2f8;border:0.5pt solid #cbd5e1;padding:3pt 6pt;text-align:left;font-weight:500}
-    td{border:0.5pt solid #e2e8f0;padding:3pt 6pt}
+    body{font-family:Georgia,serif;color:#111;font-size:11pt;line-height:1.75;margin:0;padding:0}
+    h1{font-size:15pt;font-weight:500;color:#1a1a2e;margin:14pt 0 3pt;border-bottom:1pt solid #4A90D9;padding-bottom:3pt}
+    h2{font-size:13pt;color:#2563a8;margin:11pt 0 3pt} h3{font-size:11pt;color:#4a5568;margin:8pt 0 2pt}
+    p{margin:4pt 0}ul,ol{padding-left:16pt;margin:4pt 0}
+    pre{background:#f5f7fa;border:0.5pt solid #e2e8f0;padding:6pt 9pt;white-space:pre-wrap;font-size:9pt;font-family:monospace}
+    code{background:#f0f2f5;padding:1pt 3pt;font-family:monospace;font-size:9pt;color:#c7254e}
+    blockquote{border-left:2pt solid #4A90D9;margin:6pt 0;padding-left:9pt;color:#4a5568;font-style:italic}
+    table{width:100%;border-collapse:collapse;margin:6pt 0}th{background:#eef2f8;border:0.5pt solid #cbd5e1;padding:3pt 6pt;font-weight:500}td{border:0.5pt solid #e2e8f0;padding:3pt 6pt}
     hr{border:none;border-top:0.5pt solid #e2e8f0;margin:10pt 0 7pt}
     .crumb{font-size:8pt;color:#94a3b8;margin-bottom:1pt;font-family:monospace}
   </style>`;
   let body = '';
   pages.forEach((page, i) => {
-    body += (i > 0 ? '<hr>' : '') +
-      `<div class="crumb">${getBreadcrumb(page.id)}</div>` +
-      `<h1>${page.title}</h1>` + pageContentToHtml(page);
+    body += (i > 0 ? '<hr>' : '') + `<div class="crumb">${getBreadcrumb(page.id)}</div><h1>${page.title}</h1>` + pageToHtml(page);
   });
   const el = document.createElement('div');
-  el.style.cssText = 'padding:10mm 12mm;background:#fff;';
+  el.style.cssText = 'padding:10mm 12mm;background:#fff';
   el.innerHTML = styles + body;
   if (typeof html2pdf !== 'undefined') {
-    html2pdf().set({
-      margin: [10, 12, 10, 12],
-      filename: (state.pages[id]?.title || 'export') + '.pdf',
-      html2canvas: { scale: 2, useCORS: true },
-      jsPDF: { unit: 'mm', format: 'a4' },
-      pagebreak: { mode: ['avoid-all', 'css'] }
-    }).from(el).save();
+    html2pdf().set({ margin:[10,12,10,12], filename:(state.pages[id]?.title||'export')+'.pdf', html2canvas:{scale:2,useCORS:true}, jsPDF:{unit:'mm',format:'a4'}, pagebreak:{mode:['avoid-all','css']} }).from(el).save();
   } else {
     const w = window.open('', '_blank');
-    w.document.write('<!DOCTYPE html><html><head><title>Export</title></head><body>' + el.innerHTML + '</body></html>');
+    w.document.write('<!DOCTYPE html><html><body>' + el.innerHTML + '</body></html>');
     w.document.close(); setTimeout(() => w.print(), 700);
   }
 }
 
 function exportBranchTXT(id) {
-  const pages = collectSubtree(id);
-  const txt = pages.map((p, i) =>
-    (i > 0 ? '\n\n' + '─'.repeat(60) + '\n\n' : '') +
-    `# ${p.title}\n${getBreadcrumb(p.id)}\n\n` +
-    (p.content || '').replace(/<[^>]+>/g, '')
+  const txt = collectSubtree(id).map((p, i) =>
+    (i > 0 ? '\n\n' + '─'.repeat(60) + '\n\n' : '') + `# ${p.title}\n${getBreadcrumb(p.id)}\n\n` + (p.content || '').replace(/<[^>]+>/g, '')
   ).join('');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([txt], { type: 'text/plain;charset=utf-8' }));
@@ -506,7 +589,9 @@ function exportBranchTXT(id) {
   a.click();
 }
 
-// ══ OPEN PAGE ════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
+//  OPEN PAGE / EDITOR
+// ════════════════════════════════════════════════════════════
 function openPage(id) {
   if (unsaved && state.activeId) saveCurrentEditorToPage();
   state.activeId = id; saveState();
@@ -519,7 +604,8 @@ function openPage(id) {
   updateBreadcrumb(id);
 
   previewActive = false;
-  document.getElementById('btn-preview').textContent = '▶ Перегляд';
+  document.getElementById('btn-preview').querySelector('.btn-icon').textContent = '▶';
+  document.querySelector('#btn-preview .btn-label').textContent = ' Перегляд';
 
   activeFormat = resolveFormat(page);
   applyEditorFormat(activeFormat, page.content || '');
@@ -538,37 +624,29 @@ function reloadEditorContent(page) {
   applyEditorFormat(fmt, page.content || '');
   updateStatusFormat(fmt);
   updateWordCount();
+  updateBreadcrumb(page.id);
 }
 
-// ══ EDITOR FORMAT ════════════════════════════════════════════
 function applyEditorFormat(fmt, content) {
-  const plain   = document.getElementById('editor-plain');
-  const rich    = document.getElementById('editor-rich');
-  const preview = document.getElementById('editor-preview');
-  const fmtBar  = document.getElementById('format-bar');
-  plain.classList.add('hidden'); rich.classList.add('hidden');
-  preview.classList.add('hidden'); fmtBar.classList.add('hidden');
-  if (fmt === 'rich') {
-    rich.classList.remove('hidden'); fmtBar.classList.remove('hidden'); rich.innerHTML = content;
-  } else {
-    plain.classList.remove('hidden'); plain.value = content;
-  }
+  const plain = document.getElementById('editor-plain');
+  const rich  = document.getElementById('editor-rich');
+  const prev  = document.getElementById('editor-preview');
+  const fbar  = document.getElementById('format-bar');
+  plain.classList.add('hidden'); rich.classList.add('hidden'); prev.classList.add('hidden'); fbar.classList.add('hidden');
+  if (fmt === 'rich') { rich.classList.remove('hidden'); fbar.classList.remove('hidden'); rich.innerHTML = content; }
+  else { plain.classList.remove('hidden'); plain.value = content; }
 }
 
 function getEditorContent() {
-  if (activeFormat === 'rich') return document.getElementById('editor-rich').innerHTML;
-  return document.getElementById('editor-plain').value;
+  return activeFormat === 'rich' ? document.getElementById('editor-rich').innerHTML : document.getElementById('editor-plain').value;
 }
 
 function saveCurrentEditorToPage() {
   const id = state.activeId; if (!id || !state.pages[id]) return;
   const page = state.pages[id];
-  const newTitle   = document.getElementById('page-title').value.trim() || 'Без назви';
-  const newFormat  = document.getElementById('format-select').value;
-  const newContent = getEditorContent();
-  page.title   = newTitle;
-  page.format  = newFormat;
-  page.content = newContent;
+  page.title   = document.getElementById('page-title').value.trim() || 'Без назви';
+  page.format  = document.getElementById('format-select').value;
+  page.content = getEditorContent();
   page.updatedAt = Date.now();
   saveState();
   fbQueueWrite(page);
@@ -576,53 +654,55 @@ function saveCurrentEditorToPage() {
   renderTree();
 }
 
-// ══ STATUS ════════════════════════════════════════════════════
 function setUnsaved(val) {
   unsaved = val;
-  const s = document.getElementById('status-saved');
-  s.textContent = val ? '● не збережено' : '● збережено';
-  s.className = val ? 'dirty' : 'saved';
+  // No separate "saved" indicator — sync status covers it
 }
-function flashStatus(msg) {
-  const s = document.getElementById('status-saved');
-  s.textContent = msg; s.className = 'saved';
-  setTimeout(() => setUnsaved(false), 2500);
+
+function setSavedFlash() {
+  // Trigger immediate flush and show syncing
+  flushWriteQueue();
 }
+
 function updateStatusFormat(fmt) {
-  const L = { plain: 'Текст', markdown: 'Markdown', rich: 'Форматований', auto: 'Авто' };
+  const L = { plain:'Текст', markdown:'Markdown', rich:'Форматований', auto:'Авто' };
   document.getElementById('status-format').textContent = 'Формат: ' + (L[fmt] || fmt);
 }
 function updateWordCount() {
   const text = getEditorContent().replace(/<[^>]+>/g, ' ');
-  document.getElementById('status-words').textContent =
-    (text.trim() ? text.trim().split(/\s+/).length : 0) + ' слів';
+  document.getElementById('status-words').textContent = (text.trim() ? text.trim().split(/\s+/).length : 0) + ' слів';
 }
 
-// ══ PREVIEW ══════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
+//  PREVIEW
+// ════════════════════════════════════════════════════════════
 function togglePreview() {
-  const btn     = document.getElementById('btn-preview');
-  const plain   = document.getElementById('editor-plain');
-  const rich    = document.getElementById('editor-rich');
-  const preview = document.getElementById('editor-preview');
+  const plain = document.getElementById('editor-plain');
+  const rich  = document.getElementById('editor-rich');
+  const prev  = document.getElementById('editor-preview');
+  const lbl   = document.querySelector('#btn-preview .btn-label');
+  const ico   = document.querySelector('#btn-preview .btn-icon');
   if (!previewActive) {
-    const content = getEditorContent();
     let html = '';
-    if (activeFormat === 'markdown')
-      html = typeof marked !== 'undefined' ? marked.parse(content) : content.replace(/\n/g, '<br>');
-    else if (activeFormat === 'rich') html = content;
-    else html = '<pre style="white-space:pre-wrap">' + content.replace(/</g, '&lt;') + '</pre>';
-    preview.innerHTML = html;
-    plain.classList.add('hidden'); rich.classList.add('hidden');
-    preview.classList.remove('hidden');
-    btn.textContent = '✕ Редагувати'; previewActive = true;
+    const c = getEditorContent();
+    if (activeFormat === 'markdown') html = typeof marked !== 'undefined' ? marked.parse(c) : c.replace(/\n/g,'<br>');
+    else if (activeFormat === 'rich') html = c;
+    else html = '<pre style="white-space:pre-wrap">' + c.replace(/</g,'&lt;') + '</pre>';
+    prev.innerHTML = html;
+    plain.classList.add('hidden'); rich.classList.add('hidden'); prev.classList.remove('hidden');
+    if (ico) ico.textContent = '✕'; if (lbl) lbl.textContent = ' Редагувати';
+    previewActive = true;
   } else {
-    preview.classList.add('hidden');
+    prev.classList.add('hidden');
     applyEditorFormat(activeFormat, getEditorContent());
-    btn.textContent = '▶ Перегляд'; previewActive = false;
+    if (ico) ico.textContent = '▶'; if (lbl) lbl.textContent = ' Перегляд';
+    previewActive = false;
   }
 }
 
-// ══ CONTEXT MENU ═════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
+//  CONTEXT MENU
+// ════════════════════════════════════════════════════════════
 const ctxMenu = document.getElementById('ctx-menu');
 let ctxTargetId = null;
 
@@ -636,7 +716,6 @@ function showCtxMenu(x, y, id) {
   ctxMenu.style.left = Math.min(x, window.innerWidth - 200) + 'px';
   ctxMenu.style.top  = Math.min(y, window.innerHeight - 180) + 'px';
 }
-
 document.addEventListener('click', e => { if (!ctxMenu.contains(e.target)) ctxMenu.classList.add('hidden'); });
 
 ctxMenu.addEventListener('click', e => {
@@ -647,8 +726,10 @@ ctxMenu.addEventListener('click', e => {
     startInlineRename(id);
   } else if (action === 'add-child') {
     const child = createPage(id);
-    expandState[id] = true; renderTree(); openPage(child.id);
-    setTimeout(() => startInlineRename(child.id), 100);
+    expandState[id] = true;   // expand parent
+    renderTree();
+    openPage(child.id);
+    setTimeout(() => startInlineRename(child.id), 120);
   } else if (action === 'duplicate') {
     const np = duplicatePage(id);
     if (np) { expandState[np.parentId] = true; renderTree(); openPage(np.id); }
@@ -656,22 +737,19 @@ ctxMenu.addEventListener('click', e => {
     showModal(`Видалити "${state.pages[id]?.title}" та всі підсторінки?`, () => {
       const wasActive = isInSubtree(state.activeId, id);
       deletePage(id);
-      if (wasActive) {
-        state.activeId = null;
-        document.getElementById('editor-wrap').classList.add('hidden');
-        document.getElementById('empty-state').classList.remove('hidden');
-      }
+      if (wasActive) { state.activeId = null; document.getElementById('editor-wrap').classList.add('hidden'); document.getElementById('empty-state').classList.remove('hidden'); }
       renderTree();
     });
   }
 });
 
-// ══ INLINE RENAME ════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
+//  INLINE RENAME
+// ════════════════════════════════════════════════════════════
 function startInlineRename(id) {
   renderTree();
   requestAnimationFrame(() => {
-    const row = document.querySelector(`.tree-row[data-id="${id}"]`);
-    if (!row) return;
+    const row = document.querySelector(`.tree-row[data-id="${id}"]`); if (!row) return;
     const label = row.querySelector('.tree-label');
     const inp = document.createElement('input');
     inp.className = 'rename-input'; inp.value = label.textContent;
@@ -680,26 +758,20 @@ function startInlineRename(id) {
     const commit = () => {
       const val = inp.value.trim() || 'Без назви';
       if (state.pages[id]) {
-        state.pages[id].title = val;
-        state.pages[id].updatedAt = Date.now();
-        if (state.activeId === id) {
-          document.getElementById('page-title').value = val;
-          updateBreadcrumb(id);
-        }
-        saveState();
-        fbQueueWrite(state.pages[id]);
+        state.pages[id].title = val; state.pages[id].updatedAt = Date.now();
+        if (state.activeId === id) { document.getElementById('page-title').value = val; updateBreadcrumb(id); }
+        saveState(); fbQueueWrite(state.pages[id]);
       }
       renderTree();
     };
-    inp.addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); commit(); }
-      if (e.key === 'Escape') renderTree();
-    });
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } if (e.key === 'Escape') renderTree(); });
     inp.addEventListener('blur', commit);
   });
 }
 
-// ══ MODAL ════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
+//  MODAL
+// ════════════════════════════════════════════════════════════
 function showModal(text, onConfirm) {
   document.getElementById('modal-text').textContent = text;
   document.getElementById('modal-overlay').classList.remove('hidden');
@@ -708,21 +780,15 @@ function showModal(text, onConfirm) {
   document.getElementById('modal-cancel').onclick = close;
 }
 
-// ══ SIDEBAR ══════════════════════════════════════════════════
-function getSidebarTop() {
-  const tb = document.getElementById('global-topbar');
-  return tb ? tb.offsetHeight : 44;
-}
-
+// ════════════════════════════════════════════════════════════
+//  SIDEBAR
+// ════════════════════════════════════════════════════════════
 function setSidebarOpen(open) {
   const sb = document.getElementById('sidebar');
   const isMobile = window.innerWidth <= 700;
-  if (isMobile) {
-    sb.style.top = getSidebarTop() + 'px';
-    sb.classList.toggle('mobile-open', open); sb.classList.remove('collapsed');
-  } else { sb.classList.toggle('collapsed', !open); }
+  if (isMobile) { sb.style.top = document.getElementById('global-topbar').offsetHeight + 'px'; sb.classList.toggle('mobile-open', open); sb.classList.remove('collapsed'); }
+  else { sb.classList.toggle('collapsed', !open); }
   localStorage.setItem(LS_SO, open ? '1' : '0');
-  // Update arrow icon: ← when open (click to close), → when closed (click to open)
   const arrow = document.getElementById('sidebar-arrow');
   if (arrow) arrow.innerHTML = open ? '&#8592;' : '&#8594;';
 }
@@ -735,7 +801,7 @@ function toggleSidebar() {
 document.getElementById('btn-toggle-sidebar').addEventListener('click', toggleSidebar);
 document.getElementById('editor-area').addEventListener('click', () => { if (window.innerWidth <= 700) setSidebarOpen(false); });
 
-// ══ SIDEBAR RESIZE ═══════════════════════════════════════════
+// Resize handle
 (function () {
   const resizer = document.getElementById('sidebar-resizer');
   const sidebar = document.getElementById('sidebar');
@@ -744,59 +810,47 @@ document.getElementById('editor-area').addEventListener('click', () => { if (win
     const w = Math.min(Math.max(sidebar.offsetWidth + dx, 150), Math.floor(window.innerWidth * 0.6));
     sidebar.style.width = w + 'px'; sidebar.style.transition = 'none';
   }
-  function endResize() {
-    sidebar.style.transition = '';
-    localStorage.setItem(LS_SW, sidebar.offsetWidth);
-    resizer.classList.remove('dragging');
-    document.body.style.cursor = document.body.style.userSelect = '';
-  }
+  function endResize() { sidebar.style.transition = ''; localStorage.setItem(LS_SW, sidebar.offsetWidth); resizer.classList.remove('dragging'); document.body.style.cursor = document.body.style.userSelect = ''; }
   resizer.addEventListener('mousedown', e => {
-    let lastX = e.clientX;
-    resizer.classList.add('dragging');
-    document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
-    const mm = e2 => { doResize(e2.clientX - lastX); lastX = e2.clientX; };
+    let lx = e.clientX; resizer.classList.add('dragging'); document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
+    const mm = e2 => { doResize(e2.clientX - lx); lx = e2.clientX; };
     const mu = () => { endResize(); document.removeEventListener('mousemove', mm); document.removeEventListener('mouseup', mu); };
     document.addEventListener('mousemove', mm); document.addEventListener('mouseup', mu);
   });
   resizer.addEventListener('touchstart', e => {
-    let lastX = e.touches[0].clientX;
-    const tm = e2 => { doResize(e2.touches[0].clientX - lastX); lastX = e2.touches[0].clientX; };
+    let lx = e.touches[0].clientX;
+    const tm = e2 => { doResize(e2.touches[0].clientX - lx); lx = e2.touches[0].clientX; };
     const te = () => { endResize(); document.removeEventListener('touchmove', tm); document.removeEventListener('touchend', te); };
-    document.addEventListener('touchmove', tm, { passive: true });
-    document.addEventListener('touchend', te);
+    document.addEventListener('touchmove', tm, { passive: true }); document.addEventListener('touchend', te);
   }, { passive: true });
 })();
 
-// ══ EDITOR CONTROLS ══════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
+//  EDITOR CONTROLS
+// ════════════════════════════════════════════════════════════
 document.getElementById('btn-import').addEventListener('click', () => document.getElementById('file-input').click());
-
 document.getElementById('file-input').addEventListener('change', e => {
   const file = e.target.files[0]; if (!file) return;
   const reader = new FileReader();
   reader.onload = ev => {
     const parentId = state.activeId || ROOT_ID;
     const p = createPage(parentId);
-    p.content = ev.target.result;
-    p.title = file.name.replace(/\.[^.]+$/, '');
+    p.content = ev.target.result; p.title = file.name.replace(/\.[^.]+$/, '');
     const ext = file.name.split('.').pop().toLowerCase();
     p.format = ext === 'md' ? 'markdown' : ext === 'html' ? 'rich' : 'auto';
+    p.updatedAt = Date.now();
     expandState[parentId] = true; saveState(); fbQueueWrite(p); renderTree(); openPage(p.id);
   };
   reader.readAsText(file); e.target.value = '';
 });
 
-document.getElementById('btn-export-pdf').addEventListener('click', () => {
-  if (!state.activeId) return; saveCurrentEditorToPage(); exportBranchPDF(state.activeId);
-});
+document.getElementById('btn-export-pdf').addEventListener('click', () => { if (!state.activeId) return; saveCurrentEditorToPage(); exportBranchPDF(state.activeId); });
 
 document.getElementById('format-bar').addEventListener('click', e => {
   const btn = e.target.closest('button'); if (!btn) return;
-  const cmd = btn.dataset.cmd, heading = btn.dataset.heading;
-  if (cmd) {
-    if (cmd === 'createLink') { const url = prompt('URL:'); if (url) document.execCommand('createLink', false, url); }
-    else document.execCommand(cmd, false, null);
-  } else if (heading) { document.execCommand('formatBlock', false, heading); }
-  document.getElementById('editor-rich').focus(); setUnsaved(true);
+  if (btn.dataset.cmd) { if (btn.dataset.cmd === 'createLink') { const u = prompt('URL:'); if (u) document.execCommand('createLink', false, u); } else document.execCommand(btn.dataset.cmd, false, null); }
+  else if (btn.dataset.heading) document.execCommand('formatBlock', false, btn.dataset.heading);
+  document.getElementById('editor-rich').focus(); unsaved = true;
 });
 
 document.getElementById('format-select').addEventListener('change', e => {
@@ -804,11 +858,15 @@ document.getElementById('format-select').addEventListener('change', e => {
   const fmt = e.target.value, content = getEditorContent();
   state.pages[state.activeId].format = fmt;
   activeFormat = fmt === 'auto' ? detectFormat(content) : fmt;
-  previewActive = false; document.getElementById('btn-preview').textContent = '▶ Перегляд';
-  applyEditorFormat(activeFormat, content); updateStatusFormat(activeFormat); setUnsaved(true);
+  previewActive = false;
+  applyEditorFormat(activeFormat, content); updateStatusFormat(activeFormat); unsaved = true;
 });
 
-document.getElementById('btn-save').addEventListener('click', () => { saveCurrentEditorToPage(); flushWriteQueue(); flashStatus('Збережено ✓'); });
+document.getElementById('btn-save').addEventListener('click', () => {
+  saveCurrentEditorToPage();
+  flushWriteQueue();
+});
+
 document.getElementById('btn-delete-page').addEventListener('click', () => {
   const id = state.activeId; if (!id || id === ROOT_ID) return;
   showModal(`Видалити "${state.pages[id]?.title}"?`, () => {
@@ -818,192 +876,66 @@ document.getElementById('btn-delete-page').addEventListener('click', () => {
     renderTree();
   });
 });
+
 document.getElementById('btn-preview').addEventListener('click', togglePreview);
 
 document.getElementById('btn-new-page').addEventListener('click', () => {
   if (unsaved && state.activeId) saveCurrentEditorToPage();
   const parentId = state.activeId || ROOT_ID;
   const p = createPage(parentId);
-  expandState[parentId] = true; renderTree(); openPage(p.id);
+  expandState[parentId] = true;  // expand so child is visible
+  renderTree();
+  openPage(p.id);
   setTimeout(() => document.getElementById('page-title').select(), 60);
 });
 document.getElementById('btn-create-first').addEventListener('click', () => document.getElementById('btn-new-page').click());
 
 document.getElementById('page-title').addEventListener('input', e => {
-  if (state.activeId && state.pages[state.activeId]) {
-    state.pages[state.activeId].title = e.target.value || 'Без назви';
-    updateBreadcrumb(state.activeId); renderTree();
-  }
-  setUnsaved(true);
+  if (state.activeId && state.pages[state.activeId]) { state.pages[state.activeId].title = e.target.value || 'Без назви'; updateBreadcrumb(state.activeId); renderTree(); }
+  unsaved = true;
 });
-document.getElementById('editor-plain').addEventListener('input', () => {
-  setUnsaved(true); updateWordCount();
-  if (state.pages[state.activeId]?.format === 'auto')
-    updateStatusFormat(detectFormat(document.getElementById('editor-plain').value));
-});
-document.getElementById('editor-rich').addEventListener('input', () => { setUnsaved(true); updateWordCount(); });
+document.getElementById('editor-plain').addEventListener('input', () => { unsaved = true; updateWordCount(); if (state.pages[state.activeId]?.format === 'auto') updateStatusFormat(detectFormat(document.getElementById('editor-plain').value)); });
+document.getElementById('editor-rich').addEventListener('input', () => { unsaved = true; updateWordCount(); });
 document.getElementById('search-input').addEventListener('input', renderTree);
 
-// ══ KEYBOARD ═════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
+//  KEYBOARD
+// ════════════════════════════════════════════════════════════
 document.addEventListener('keydown', e => {
   const mod = e.ctrlKey || e.metaKey;
-  if (mod && e.key === 's') { e.preventDefault(); saveCurrentEditorToPage(); flushWriteQueue(); flashStatus('Збережено ✓'); }
+  if (mod && e.key === 's') { e.preventDefault(); saveCurrentEditorToPage(); flushWriteQueue(); }
   if (mod && e.key === 'n') { e.preventDefault(); document.getElementById('btn-new-page').click(); }
   if (mod && e.shiftKey && e.key === 'P') { e.preventDefault(); togglePreview(); }
 });
 
-// ══ AUTOSAVE ═════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
+//  AUTOSAVE + NETWORK
+// ════════════════════════════════════════════════════════════
 setInterval(() => { if (unsaved && state.activeId) saveCurrentEditorToPage(); }, 15000);
-// Flush any pending Firebase writes every 10s
 setInterval(() => { if (writeQueue.size > 0) flushWriteQueue(); }, 10000);
-
-// ══ NETWORK STATUS ═══════════════════════════════════════════
 window.addEventListener('online',  () => { setSyncStatus('syncing'); flushWriteQueue(); });
 window.addEventListener('offline', () => setSyncStatus('offline'));
 
-// ══════════════════════════════════════════════════════════════
-//  AUTH UI
-// ══════════════════════════════════════════════════════════════
-
-function showAuthOverlay() {
-  document.getElementById('auth-overlay').classList.remove('hidden');
-  document.getElementById('app').style.visibility = 'hidden';
-}
-function hideAuthOverlay() {
-  document.getElementById('auth-overlay').classList.add('hidden');
-  document.getElementById('app').style.visibility = '';
-}
-function showUserBadge(user) {
-  // Remove existing badge if any
-  document.getElementById('user-badge')?.remove();
-  const div = document.createElement('div');
-  div.id = 'user-badge';
-  const email = user.email || user.displayName || 'Користувач';
-  div.innerHTML = `<span title="${email}">👤 ${email.split('@')[0]}</span>`;
-  const logoutBtn = document.createElement('button');
-  logoutBtn.id = 'btn-logout';
-  logoutBtn.textContent = 'Вийти';
-  logoutBtn.addEventListener('click', () => auth.signOut());
-  document.querySelector('.topbar-left').after(div);
-  div.after(logoutBtn);
-}
-function showAuthError(msg) {
-  const el = document.getElementById('auth-error');
-  el.textContent = msg; el.classList.remove('hidden');
-}
-function hideAuthError() { document.getElementById('auth-error').classList.add('hidden'); }
-function setAuthLoading(on) {
-  const loading = document.getElementById('auth-loading');
-  const formL   = document.getElementById('auth-form-login');
-  const formR   = document.getElementById('auth-form-reg');
-  if (on) {
-    loading.classList.remove('hidden'); loading.classList.add('flex');
-    formL.classList.add('hidden'); formR.classList.add('hidden');
-  } else {
-    loading.classList.add('hidden'); loading.classList.remove('flex');
-    formL.classList.remove('hidden');
-  }
-}
-
-// ── Auth event listeners ────────────────────────────────────
-document.getElementById('btn-login').addEventListener('click', async () => {
-  const email = document.getElementById('auth-email').value.trim();
-  const pass  = document.getElementById('auth-pass').value;
-  if (!email || !pass) { showAuthError('Введіть email і пароль'); return; }
-  hideAuthError(); setAuthLoading(true);
-  try {
-    await auth.signInWithEmailAndPassword(email, pass);
-  } catch (e) {
-    setAuthLoading(false);
-    const msgs = {
-      'auth/user-not-found':   'Акаунт не знайдено',
-      'auth/wrong-password':   'Невірний пароль',
-      'auth/invalid-email':    'Невірний формат email',
-      'auth/too-many-requests':'Забагато спроб. Спробуйте пізніше',
-      'auth/invalid-credential': 'Невірний email або пароль',
-    };
-    showAuthError(msgs[e.code] || e.message);
-  }
-});
-
-document.getElementById('btn-register').addEventListener('click', async () => {
-  const email = document.getElementById('reg-email').value.trim();
-  const pass  = document.getElementById('reg-pass').value;
-  if (!email || !pass) { showAuthError('Введіть email і пароль'); return; }
-  if (pass.length < 6)  { showAuthError('Пароль має бути мінімум 6 символів'); return; }
-  hideAuthError(); setAuthLoading(true);
-  try {
-    await auth.createUserWithEmailAndPassword(email, pass);
-  } catch (e) {
-    setAuthLoading(false);
-    const msgs = {
-      'auth/email-already-in-use':'Цей email вже використовується',
-      'auth/invalid-email':       'Невірний формат email',
-      'auth/weak-password':       'Пароль занадто простий',
-    };
-    showAuthError(msgs[e.code] || e.message);
-  }
-});
-
-document.getElementById('btn-google').addEventListener('click', async () => {
-  hideAuthError(); setAuthLoading(true);
-  try {
-    const provider = new firebase.auth.GoogleAuthProvider();
-    await auth.signInWithPopup(provider);
-  } catch (e) {
-    setAuthLoading(false);
-    if (e.code !== 'auth/popup-closed-by-user') showAuthError(e.message);
-  }
-});
-
-document.getElementById('btn-forgot').addEventListener('click', async () => {
-  const email = document.getElementById('auth-email').value.trim();
-  if (!email) { showAuthError('Введіть email для відновлення пароля'); return; }
-  try {
-    await auth.sendPasswordResetEmail(email);
-    showAuthError('Лист надіслано на ' + email);
-    document.getElementById('auth-error').style.color = 'var(--success)';
-  } catch (e) { showAuthError(e.message); }
-});
-
-document.getElementById('btn-to-reg').addEventListener('click', () => {
-  hideAuthError();
-  document.getElementById('auth-form-login').classList.add('hidden');
-  document.getElementById('auth-form-reg').classList.remove('hidden');
-});
-document.getElementById('btn-to-login').addEventListener('click', () => {
-  hideAuthError();
-  document.getElementById('auth-form-reg').classList.add('hidden');
-  document.getElementById('auth-form-login').classList.remove('hidden');
-});
-
-// Enter key в полях
-['auth-email','auth-pass'].forEach(id => {
-  document.getElementById(id).addEventListener('keydown', e => {
-    if (e.key === 'Enter') document.getElementById('btn-login').click();
-  });
-});
-['reg-email','reg-pass'].forEach(id => {
-  document.getElementById(id).addEventListener('keydown', e => {
-    if (e.key === 'Enter') document.getElementById('btn-register').click();
-  });
-});
-
-// ══ INIT ═════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
+//  INIT
+// ════════════════════════════════════════════════════════════
 loadState();
 ensureRoot();
 
 const savedW = localStorage.getItem(LS_SW);
 if (savedW && window.innerWidth > 700) document.getElementById('sidebar').style.width = savedW + 'px';
 
-setSidebarOpen(localStorage.getItem(LS_SO) !== '0');
+// Sidebar defaults: open on desktop, closed on mobile
+const sidebarPref = localStorage.getItem(LS_SO);
+setSidebarOpen(window.innerWidth > 700 ? sidebarPref !== '0' : false);
+
 applyLabels();
 if (expandState[ROOT_ID] === undefined) expandState[ROOT_ID] = true;
 
-// Render with local data first (instant display)
+// Render local data immediately (works offline)
 renderTree();
 if (state.activeId && state.pages[state.activeId]) openPage(state.activeId);
 else openPage(ROOT_ID);
 
-// Init Firebase (auth overlay shows automatically if not logged in)
-window.addEventListener('load', () => setTimeout(initFirebase, 400));
+// Firebase init — auth overlay shows/hides automatically via onAuthStateChanged
+window.addEventListener('load', () => initFirebase());
