@@ -36,15 +36,9 @@ let fbUnsub    = null;
 const writeQueue = new Set();
 let writeTimer   = null;
 
-// IDs of pages created locally but not yet confirmed by onSnapshot.
-// Prevents the snapshot callback from overwriting local parent.children[]
-// before the page has been fully inserted into the tree.
-const recentlyCreated = new Set();
-
 // Tracks every page we wrote to Firestore ourselves.
-// When onSnapshot echoes our own write back, we skip it — local state is
-// already correct and we must not let the server overwrite unsaved edits.
-const localWrites = new Map(); // id → updatedAt timestamp of our write
+// When onSnapshot echoes our own write back, we skip it.
+const localWrites = new Map(); // id → updatedAt of our write
 
 // ════════════════════════════════════════════════════════════
 //  FIREBASE INIT
@@ -102,33 +96,78 @@ function onLogout() {
 
 // ════════════════════════════════════════════════════════════
 //  FIRESTORE — user-scoped path: users/{uid}/pages/{id}
+//
+//  SYNC RULES:
+//  1. Device → DB : only on explicit Save (button / Ctrl+S)
+//  2. DB → Device : automatically when DB changes (onSnapshot)
+//                   but NEVER overwrite a page the user is
+//                   currently editing (unsaved changes).
+//  3. On app open : full download from DB if DB has data;
+//                   upload local if DB is empty (first run).
 // ════════════════════════════════════════════════════════════
 function pagesCol() {
   return db.collection('users').doc(currentUid).collection('pages');
 }
 
-// Full sync: download ALL pages from Firestore, replace local state
+// ── Helpers ─────────────────────────────────────────────────
+
+// Apply a set of remote pages to local state and refresh UI.
+// Pages the user is currently editing are protected — only
+// metadata (title, parentId, format) is updated, content is kept.
+function applyRemotePages(remoteMap, { fullReplace = false } = {}) {
+  if (fullReplace) {
+    state.pages = {};
+  }
+
+  Object.values(remoteMap).forEach(remote => {
+    const id = remote.id;
+    if (!id) return;
+    const local = state.pages[id];
+    const isEditing = (id === state.activeId && unsaved);
+
+    if (isEditing) {
+      // Keep local content; accept remote structural fields
+      state.pages[id] = { ...remote, content: local.content, children: local.children || [] };
+    } else {
+      state.pages[id] = { ...remote, children: local ? local.children : [] };
+    }
+  });
+
+  ensureRoot();
+  rebuildChildrenFromParentId();
+  saveLocalOnly();
+}
+
+// Remove a remote-deleted page from local state.
+function applyRemoteDelete(id) {
+  if (!state.pages[id] || id === ROOT_ID) return;
+  const page = state.pages[id];
+  if (page.parentId && state.pages[page.parentId]) {
+    const par = state.pages[page.parentId];
+    par.children = (par.children || []).filter(c => c !== id);
+  }
+  delete state.pages[id];
+}
+
+// ── Initial load (called once on login) ─────────────────────
 async function syncFromFirestore() {
   if (!fbReady || !currentUid) return;
+  setSyncStatus('syncing');
   try {
     const snap = await pagesCol().get();
     if (!snap.empty) {
-      // Remote has data — use it as source of truth
-      const newPages = {};
+      // DB has data — it is the source of truth on first load
+      const remoteMap = {};
       snap.forEach(doc => {
-      const d = { ...doc.data(), id: doc.id, children: [] };
-        newPages[doc.id] = d;
+        remoteMap[doc.id] = { ...doc.data(), id: doc.id, children: [] };
       });
-      state.pages = newPages;
-      ensureRoot();
-      // Rebuild children[] from parentId (Firestore data may have stale children)
-      rebuildChildrenFromParentId();
-      saveLocalOnly();
+      applyRemotePages(remoteMap, { fullReplace: true });
       renderTree();
       if (state.activeId && state.pages[state.activeId]) openPage(state.activeId);
       else openPage(ROOT_ID);
+      setSyncStatus('synced');
     } else {
-      // Firestore empty — upload local data
+      // DB empty — first run on a new device, push local data up
       await batchUploadAll();
     }
   } catch (e) {
@@ -137,10 +176,10 @@ async function syncFromFirestore() {
   }
 }
 
-// Upload all local pages to Firestore in batches
+// ── Upload all local pages (first-run / manual full push) ───
 async function batchUploadAll() {
   const pages = Object.values(state.pages);
-  if (!pages.length) return;
+  if (!pages.length) { setSyncStatus('synced'); return; }
   setSyncStatus('syncing');
   for (let i = 0; i < pages.length; i += 400) {
     const batch = db.batch();
@@ -150,69 +189,77 @@ async function batchUploadAll() {
   setSyncStatus('synced');
 }
 
-// Real-time listener — catches ALL changes from ANY device
+// ── Real-time listener: DB → Device ─────────────────────────
+// Fires whenever the DB changes (from any device).
+// This is READ-ONLY from the perspective of this device —
+// we never write to DB from here.
 function subscribeFirestore() {
   if (!fbReady || !currentUid) return;
   if (fbUnsub) fbUnsub();
 
-  // onSnapshot fires immediately with current state, then on every change
-  // We use docChanges() to process only what changed
+  // skipFirst: the initial snapshot fires immediately and contains
+  // all existing docs as 'added'. We already loaded them in
+  // syncFromFirestore(), so we skip that first batch.
+  let skipFirst = true;
+
   fbUnsub = pagesCol().onSnapshot({ includeMetadataChanges: false }, snap => {
-    let changed = false;
+    if (skipFirst) {
+      skipFirst = false;
+      return; // already handled by syncFromFirestore()
+    }
+
+    // localWrites: ignore echo of our own Save
+    // (Firestore echoes every write back to the same client)
+    const toApply  = {};
+    const toDelete = [];
+    let   hasChanges = false;
 
     snap.docChanges().forEach(change => {
-      const remote = { ...change.doc.data(), id: change.doc.id };
-      const id = remote.id;
-      if (!id) return;
+      const id = change.doc.id;
 
       if (change.type === 'removed') {
-        if (id !== ROOT_ID && state.pages[id]) {
-          const removedPage = state.pages[id];
-          if (removedPage.parentId && state.pages[removedPage.parentId]) {
-            const par = state.pages[removedPage.parentId];
-            par.children = (par.children || []).filter(c => c !== id);
-          }
-          delete state.pages[id];
-          changed = true;
-        }
+        // Always apply deletes (deletion is authoritative)
+        toDelete.push(id);
+        hasChanges = true;
         return;
       }
 
-      // Skip if this is the echo of our own write (same updatedAt = same data)
-      const ourTimestamp = localWrites.get(id);
-      if (ourTimestamp !== undefined && remote.updatedAt === ourTimestamp) {
+      // Skip the echo of our own write
+      const ourTs = localWrites.get(id);
+      const remoteTs = change.doc.data().updatedAt;
+      if (ourTs !== undefined && remoteTs === ourTs) {
         localWrites.delete(id);
-        recentlyCreated.delete(id);
-        return; // local state is already correct, ignore echo
+        return; // our own data, already correct locally
       }
       localWrites.delete(id);
-      recentlyCreated.delete(id);
 
-      // Genuine remote change from another device — apply it.
-      // If user is actively editing this page, keep local content but take metadata.
-      if (id === state.activeId && unsaved) {
-        const local = state.pages[id];
-        state.pages[id] = { ...remote, content: local ? local.content : remote.content, children: local ? local.children : [] };
-      } else {
-        state.pages[id] = { ...remote, children: state.pages[id]?.children || [] };
-      }
-      changed = true;
+      // Genuine change from another device — queue for apply
+      toApply[id] = { ...change.doc.data(), id, children: [] };
+      hasChanges = true;
     });
 
-    if (changed) {
-      ensureRoot();
-      rebuildChildrenFromParentId();
-      saveLocalOnly();
-      renderTree();
-      // Reload editor content if active page was changed remotely
-      if (state.activeId && state.pages[state.activeId] && !unsaved) {
+    if (!hasChanges) return;
+
+    toDelete.forEach(id => applyRemoteDelete(id));
+    if (Object.keys(toApply).length) applyRemotePages(toApply);
+
+    ensureRoot();
+    rebuildChildrenFromParentId();
+    saveLocalOnly();
+    renderTree();
+
+    // Refresh editor only if active page changed from remote
+    // and user has no unsaved edits
+    if (state.activeId && state.pages[state.activeId] && !unsaved) {
+      if (toApply[state.activeId]) {
         reloadEditorContent(state.pages[state.activeId]);
       }
     }
+
     setSyncStatus('synced');
 
   }, err => {
-    console.warn('Firestore error', err.code, err.message);
+    console.warn('Firestore listener error', err.code, err.message);
     setSyncStatus(navigator.onLine ? 'error' : 'offline');
   });
 }
@@ -358,7 +405,6 @@ function createPage(parentId) {
   const now = Date.now();
   const page = { id, title: 'Без назви', content: '', format: 'auto', parentId, children: [], createdAt: now, updatedAt: now };
   state.pages[id] = page;
-  recentlyCreated.add(id);
   const parent = state.pages[parentId];
   if (parent) {
     if (!Array.isArray(parent.children)) parent.children = [];
