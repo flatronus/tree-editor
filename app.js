@@ -106,7 +106,7 @@ async function syncFromFirestore() {
       // Remote has data — use it as source of truth
       const newPages = {};
       snap.forEach(doc => {
-        const d = { ...doc.data(), id: doc.id };
+      const d = { ...doc.data(), id: doc.id, children: [] };
         newPages[doc.id] = d;
       });
       state.pages = newPages;
@@ -134,7 +134,7 @@ async function batchUploadAll() {
   setSyncStatus('syncing');
   for (let i = 0; i < pages.length; i += 400) {
     const batch = db.batch();
-    pages.slice(i, i + 400).forEach(p => batch.set(pagesCol().doc(p.id), p));
+    pages.slice(i, i + 400).forEach(p => batch.set(pagesCol().doc(p.id), pageToFirestore(p)));
     await batch.commit();
   }
   setSyncStatus('synced');
@@ -157,6 +157,12 @@ function subscribeFirestore() {
 
       if (change.type === 'removed') {
         if (id !== ROOT_ID && state.pages[id]) {
+          const removedPage = state.pages[id];
+          // Remove from parent's local children list immediately
+          if (removedPage.parentId && state.pages[removedPage.parentId]) {
+            const par = state.pages[removedPage.parentId];
+            par.children = (par.children || []).filter(c => c !== id);
+          }
           delete state.pages[id];
           changed = true;
         }
@@ -164,10 +170,15 @@ function subscribeFirestore() {
       }
 
       // 'added' or 'modified' — update local state
-      // Skip only if THIS device is actively typing in this exact page right now
-      if (id === state.activeId && unsaved && change.type === 'modified') return;
-
-      state.pages[id] = remote;
+      // If user is actively editing THIS page, preserve editor content but
+      // still update metadata (title, parentId, format) so the tree stays correct.
+      if (id === state.activeId && unsaved && change.type === 'modified') {
+        // Merge: keep local content but accept remote structural fields
+        const local = state.pages[id];
+        state.pages[id] = { ...remote, content: local ? local.content : remote.content, children: local ? local.children : [] };
+      } else {
+        state.pages[id] = { ...remote, children: state.pages[id]?.children || [] };
+      }
       changed = true;
     });
 
@@ -197,6 +208,14 @@ function fbQueueWrite(page) {
   writeTimer = setTimeout(flushWriteQueue, 600);
 }
 
+// Serialise a page for Firestore — strip runtime-only children[] field
+// The tree is reconstructed from parentId on every load/sync, so storing
+// children[] in Firestore only causes cross-device conflicts.
+function pageToFirestore(page) {
+  const { children, ...rest } = page; // eslint-disable-line no-unused-vars
+  return rest;
+}
+
 async function flushWriteQueue() {
   if (!fbReady || !currentUid || !writeQueue.size) return;
   setSyncStatus('syncing');
@@ -206,7 +225,7 @@ async function flushWriteQueue() {
     const batch = db.batch();
     ids.forEach(id => {
       const p = state.pages[id];
-      if (p) batch.set(pagesCol().doc(id), p);
+      if (p) batch.set(pagesCol().doc(id), pageToFirestore(p));
     });
     await batch.commit();
     setSyncStatus('synced');
@@ -278,29 +297,35 @@ function uid() { return Date.now().toString(36) + Math.random().toString(36).sli
 function ensureRoot() {
   if (!state.pages[ROOT_ID]) {
     state.pages[ROOT_ID] = { id: ROOT_ID, title: 'Мій архів', content: '', format: 'plain', parentId: null, children: [], createdAt: Date.now(), updatedAt: Date.now() };
+    // Write root to Firestore so other devices see it
+    if (fbReady) fbQueueWrite(state.pages[ROOT_ID]);
   }
   Object.values(state.pages).forEach(p => { if (!Array.isArray(p.children)) p.children = []; });
 }
 
 // Rebuild children[] arrays from parentId — fixes tree after Firestore sync
-// Firestore docs are flat: each page has parentId but children[] may be stale
+// Strategy: collect all children grouped by parentId, then merge with existing
+// order (existing order in parent.children takes priority, new ones appended)
 function rebuildChildrenFromParentId() {
-  // Clear all children arrays
-  Object.values(state.pages).forEach(p => { p.children = []; });
-  // Re-populate from parentId
+  // Group child IDs by parentId
+  const byParent = {};
   Object.values(state.pages).forEach(p => {
     if (p.parentId && state.pages[p.parentId]) {
-      if (!state.pages[p.parentId].children.includes(p.id)) {
-        state.pages[p.parentId].children.push(p.id);
-      }
+      if (!byParent[p.parentId]) byParent[p.parentId] = new Set();
+      byParent[p.parentId].add(p.id);
     }
   });
-  // Sort children by createdAt so order is stable
+
+  // For each parent: keep existing order, append missing, remove orphans
   Object.values(state.pages).forEach(p => {
-    p.children.sort((a, b) => {
-      const pa = state.pages[a], pb = state.pages[b];
-      return (pa?.createdAt || 0) - (pb?.createdAt || 0);
-    });
+    const expected = byParent[p.id] || new Set();
+    // Keep existing valid children in their current order
+    const kept = (p.children || []).filter(c => expected.has(c));
+    // Append any new children not yet in the list (sorted by createdAt)
+    const existing = new Set(kept);
+    const newKids = [...expected].filter(c => !existing.has(c));
+    newKids.sort((a, b) => (state.pages[a]?.createdAt || 0) - (state.pages[b]?.createdAt || 0));
+    p.children = [...kept, ...newKids];
   });
 }
 
@@ -317,7 +342,7 @@ function createPage(parentId) {
     if (!Array.isArray(parent.children)) parent.children = [];
     if (!parent.children.includes(id)) parent.children.push(id);
     parent.updatedAt = now;
-    fbQueueWrite(parent);
+    // No need to fbQueueWrite(parent) — tree structure is derived from child's parentId
   }
   saveState();
   fbQueueWrite(page);
@@ -332,7 +357,10 @@ function deletePage(id) {
   const page = state.pages[id]; if (!page) return;
   [...(page.children || [])].forEach(deletePage);
   const parent = state.pages[page.parentId];
-  if (parent) { parent.children = parent.children.filter(c => c !== id); parent.updatedAt = Date.now(); fbQueueWrite(parent); }
+  if (parent) {
+    parent.children = parent.children.filter(c => c !== id);
+    // No need to write parent to Firestore — child deletion triggers rebuild on all devices
+  }
   fbDeletePage(id);
   delete state.pages[id];
   saveState();
@@ -502,7 +530,7 @@ function showPageActions(id, anchor) {
 
 function saveBranch(id) {
   if (state.activeId && isInSubtree(state.activeId, id)) saveCurrentEditorToPage();
-  collectSubtree(id).forEach(p => fbQueueWrite(p));
+  collectSubtree(id).forEach(p => writeQueue.add(p.id));
   flushWriteQueue();
 }
 
