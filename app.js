@@ -41,6 +41,11 @@ let writeTimer   = null;
 // before the page has been fully inserted into the tree.
 const recentlyCreated = new Set();
 
+// Tracks every page we wrote to Firestore ourselves.
+// When onSnapshot echoes our own write back, we skip it — local state is
+// already correct and we must not let the server overwrite unsaved edits.
+const localWrites = new Map(); // id → updatedAt timestamp of our write
+
 // ════════════════════════════════════════════════════════════
 //  FIREBASE INIT
 // ════════════════════════════════════════════════════════════
@@ -163,7 +168,6 @@ function subscribeFirestore() {
       if (change.type === 'removed') {
         if (id !== ROOT_ID && state.pages[id]) {
           const removedPage = state.pages[id];
-          // Remove from parent's local children list immediately
           if (removedPage.parentId && state.pages[removedPage.parentId]) {
             const par = state.pages[removedPage.parentId];
             par.children = (par.children || []).filter(c => c !== id);
@@ -174,16 +178,19 @@ function subscribeFirestore() {
         return;
       }
 
-      // 'added' or 'modified' — update local state
-      // If this page was just created locally, the local state is already correct
-      // (parent.children[] is set). Only accept the remote version once confirmed.
-      if (change.type === 'added' && recentlyCreated.has(id)) {
-        // Local already has this page with correct parentId — just remove guard
+      // Skip if this is the echo of our own write (same updatedAt = same data)
+      const ourTimestamp = localWrites.get(id);
+      if (ourTimestamp !== undefined && remote.updatedAt === ourTimestamp) {
+        localWrites.delete(id);
         recentlyCreated.delete(id);
-        // Still mark changed so tree re-renders
-        changed = true;
-      } else if (id === state.activeId && unsaved && change.type === 'modified') {
-        // Merge: keep local content but accept remote structural fields
+        return; // local state is already correct, ignore echo
+      }
+      localWrites.delete(id);
+      recentlyCreated.delete(id);
+
+      // Genuine remote change from another device — apply it.
+      // If user is actively editing this page, keep local content but take metadata.
+      if (id === state.activeId && unsaved) {
         const local = state.pages[id];
         state.pages[id] = { ...remote, content: local ? local.content : remote.content, children: local ? local.children : [] };
       } else {
@@ -238,6 +245,10 @@ async function flushWriteQueue() {
     await batch.commit();
     // Pages confirmed in Firestore — remove from recently-created guard
     ids.forEach(id => recentlyCreated.delete(id));
+    // Record that these are OUR writes — onSnapshot echo must be ignored
+    ids.forEach(id => {
+      if (state.pages[id]) localWrites.set(id, state.pages[id].updatedAt);
+    });
     setSyncStatus('synced');
   } catch (e) {
     console.warn('flushWriteQueue error', e);
