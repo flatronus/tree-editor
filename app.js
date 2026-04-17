@@ -287,20 +287,18 @@ async function flushWriteQueue() {
     const batch = db.batch();
     ids.forEach(id => {
       const p = state.pages[id];
-      if (p) batch.set(pagesCol().doc(id), pageToFirestore(p));
+      if (p) {
+        // Register BEFORE commit — onSnapshot echo can arrive before
+        // await returns, so the guard must already be in place.
+        localWrites.set(id, p.updatedAt);
+        batch.set(pagesCol().doc(id), pageToFirestore(p));
+      }
     });
     await batch.commit();
-    // Pages confirmed in Firestore — remove from recently-created guard
-    ids.forEach(id => recentlyCreated.delete(id));
-    // Record that these are OUR writes — onSnapshot echo must be ignored
-    ids.forEach(id => {
-      if (state.pages[id]) localWrites.set(id, state.pages[id].updatedAt);
-    });
     setSyncStatus('synced');
   } catch (e) {
     console.warn('flushWriteQueue error', e);
-    // Re-queue on failure
-    ids.forEach(id => writeQueue.add(id));
+    ids.forEach(id => { writeQueue.add(id); localWrites.delete(id); });
     setSyncStatus('error');
     setTimeout(flushWriteQueue, 5000);
   }
