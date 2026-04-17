@@ -101,7 +101,7 @@ function pagesCol() {
 async function syncFromFirestore() {
   if (!fbReady || !currentUid) return;
   try {
-    const snap = await pagesCol().orderBy('updatedAt', 'desc').get();
+    const snap = await pagesCol().get();
     if (!snap.empty) {
       // Remote has data — use it as source of truth
       const newPages = {};
@@ -111,6 +111,8 @@ async function syncFromFirestore() {
       });
       state.pages = newPages;
       ensureRoot();
+      // Rebuild children[] from parentId (Firestore data may have stale children)
+      rebuildChildrenFromParentId();
       saveLocalOnly();
       renderTree();
       if (state.activeId && state.pages[state.activeId]) openPage(state.activeId);
@@ -138,46 +140,43 @@ async function batchUploadAll() {
   setSyncStatus('synced');
 }
 
-// Real-time listener — catches changes made on OTHER devices
-let fbSnapshotReady = false; // true after initial snapshot processed
-
+// Real-time listener — catches ALL changes from ANY device
 function subscribeFirestore() {
   if (!fbReady || !currentUid) return;
   if (fbUnsub) fbUnsub();
-  fbSnapshotReady = false;
 
+  // onSnapshot fires immediately with current state, then on every change
+  // We use docChanges() to process only what changed
   fbUnsub = pagesCol().onSnapshot({ includeMetadataChanges: false }, snap => {
-    // First snapshot = initial state already loaded by syncFromFirestore → skip
-    if (!fbSnapshotReady) {
-      fbSnapshotReady = true;
-      setSyncStatus('synced');
-      return;
-    }
-
-    // Subsequent snapshots = real-time changes from other devices
     let changed = false;
+
     snap.docChanges().forEach(change => {
       const remote = { ...change.doc.data(), id: change.doc.id };
       const id = remote.id;
       if (!id) return;
 
       if (change.type === 'removed') {
-        if (id !== ROOT_ID && state.pages[id]) { delete state.pages[id]; changed = true; }
+        if (id !== ROOT_ID && state.pages[id]) {
+          delete state.pages[id];
+          changed = true;
+        }
         return;
       }
 
-      // Don't overwrite the page actively being typed right now
-      if (id === state.activeId && unsaved) return;
+      // 'added' or 'modified' — update local state
+      // Skip only if THIS device is actively typing in this exact page right now
+      if (id === state.activeId && unsaved && change.type === 'modified') return;
 
-      // Always accept remote changes (they come from other devices)
       state.pages[id] = remote;
       changed = true;
     });
 
     if (changed) {
       ensureRoot();
+      rebuildChildrenFromParentId();
       saveLocalOnly();
       renderTree();
+      // Reload editor content if active page was changed remotely
       if (state.activeId && state.pages[state.activeId] && !unsaved) {
         reloadEditorContent(state.pages[state.activeId]);
       }
@@ -185,7 +184,7 @@ function subscribeFirestore() {
     setSyncStatus('synced');
 
   }, err => {
-    console.warn('Firestore snapshot error', err.code);
+    console.warn('Firestore error', err.code, err.message);
     setSyncStatus(navigator.onLine ? 'error' : 'offline');
   });
 }
@@ -280,8 +279,29 @@ function ensureRoot() {
   if (!state.pages[ROOT_ID]) {
     state.pages[ROOT_ID] = { id: ROOT_ID, title: 'Мій архів', content: '', format: 'plain', parentId: null, children: [], createdAt: Date.now(), updatedAt: Date.now() };
   }
-  // Ensure children array exists on all pages
   Object.values(state.pages).forEach(p => { if (!Array.isArray(p.children)) p.children = []; });
+}
+
+// Rebuild children[] arrays from parentId — fixes tree after Firestore sync
+// Firestore docs are flat: each page has parentId but children[] may be stale
+function rebuildChildrenFromParentId() {
+  // Clear all children arrays
+  Object.values(state.pages).forEach(p => { p.children = []; });
+  // Re-populate from parentId
+  Object.values(state.pages).forEach(p => {
+    if (p.parentId && state.pages[p.parentId]) {
+      if (!state.pages[p.parentId].children.includes(p.id)) {
+        state.pages[p.parentId].children.push(p.id);
+      }
+    }
+  });
+  // Sort children by createdAt so order is stable
+  Object.values(state.pages).forEach(p => {
+    p.children.sort((a, b) => {
+      const pa = state.pages[a], pb = state.pages[b];
+      return (pa?.createdAt || 0) - (pb?.createdAt || 0);
+    });
+  });
 }
 
 // ════════════════════════════════════════════════════════════
@@ -289,17 +309,21 @@ function ensureRoot() {
 // ════════════════════════════════════════════════════════════
 function createPage(parentId) {
   const id = uid();
-  const page = { id, title: 'Без назви', content: '', format: 'auto', parentId, children: [], createdAt: Date.now(), updatedAt: Date.now() };
+  const now = Date.now();
+  const page = { id, title: 'Без назви', content: '', format: 'auto', parentId, children: [], createdAt: now, updatedAt: now };
   state.pages[id] = page;
   const parent = state.pages[parentId];
   if (parent) {
     if (!Array.isArray(parent.children)) parent.children = [];
-    parent.children.push(id);
-    parent.updatedAt = Date.now();
+    if (!parent.children.includes(id)) parent.children.push(id);
+    parent.updatedAt = now;
     fbQueueWrite(parent);
   }
   saveState();
   fbQueueWrite(page);
+  // Flush immediately so other devices see the new page right away
+  clearTimeout(writeTimer);
+  flushWriteQueue();
   return page;
 }
 
@@ -595,6 +619,9 @@ function saveCurrentEditorToPage() {
   fbQueueWrite(page);
   setUnsaved(false);
   renderTree();
+  // Flush immediately on explicit save
+  clearTimeout(writeTimer);
+  flushWriteQueue();
 }
 
 function setUnsaved(val) {
