@@ -36,6 +36,11 @@ let fbUnsub    = null;
 const writeQueue = new Set();
 let writeTimer   = null;
 
+// IDs of pages created locally but not yet confirmed by onSnapshot.
+// Prevents the snapshot callback from overwriting local parent.children[]
+// before the page has been fully inserted into the tree.
+const recentlyCreated = new Set();
+
 // ════════════════════════════════════════════════════════════
 //  FIREBASE INIT
 // ════════════════════════════════════════════════════════════
@@ -170,9 +175,14 @@ function subscribeFirestore() {
       }
 
       // 'added' or 'modified' — update local state
-      // If user is actively editing THIS page, preserve editor content but
-      // still update metadata (title, parentId, format) so the tree stays correct.
-      if (id === state.activeId && unsaved && change.type === 'modified') {
+      // If this page was just created locally, the local state is already correct
+      // (parent.children[] is set). Only accept the remote version once confirmed.
+      if (change.type === 'added' && recentlyCreated.has(id)) {
+        // Local already has this page with correct parentId — just remove guard
+        recentlyCreated.delete(id);
+        // Still mark changed so tree re-renders
+        changed = true;
+      } else if (id === state.activeId && unsaved && change.type === 'modified') {
         // Merge: keep local content but accept remote structural fields
         const local = state.pages[id];
         state.pages[id] = { ...remote, content: local ? local.content : remote.content, children: local ? local.children : [] };
@@ -228,6 +238,8 @@ async function flushWriteQueue() {
       if (p) batch.set(pagesCol().doc(id), pageToFirestore(p));
     });
     await batch.commit();
+    // Pages confirmed in Firestore — remove from recently-created guard
+    ids.forEach(id => recentlyCreated.delete(id));
     setSyncStatus('synced');
   } catch (e) {
     console.warn('flushWriteQueue error', e);
@@ -337,6 +349,7 @@ function createPage(parentId) {
   const now = Date.now();
   const page = { id, title: 'Без назви', content: '', format: 'auto', parentId, children: [], createdAt: now, updatedAt: now };
   state.pages[id] = page;
+  recentlyCreated.add(id);
   const parent = state.pages[parentId];
   if (parent) {
     if (!Array.isArray(parent.children)) parent.children = [];
@@ -888,9 +901,6 @@ document.getElementById('btn-new-page').addEventListener('click', () => {
 
   // Expand parent so child appears in tree
   expandState[parentId] = true;
-
-  // Immediately write to Firestore (don't wait for queue)
-  flushWriteQueue();
 
   renderTree();
   openPage(p.id);
