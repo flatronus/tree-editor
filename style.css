@@ -454,6 +454,7 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 .sync-badge.synced  { color: var(--success); }
 .sync-badge.offline { color: var(--text3); }
 .sync-badge.error   { color: var(--danger); }
+.sync-badge.pending { color: var(--warning); }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 
 /* ══ AUTH OVERLAY ══ */

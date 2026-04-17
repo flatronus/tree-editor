@@ -210,12 +210,10 @@ function subscribeFirestore() {
   });
 }
 
-// Queue a page write — flushed in batch after 600ms idle
+// Queue a page write — flushed only on explicit Save (Ctrl+S / кнопка)
 function fbQueueWrite(page) {
   if (!fbReady || !currentUid) return;
   writeQueue.add(page.id);
-  clearTimeout(writeTimer);
-  writeTimer = setTimeout(flushWriteQueue, 600);
 }
 
 // Serialise a page for Firestore — strip runtime-only children[] field
@@ -258,7 +256,7 @@ async function fbDeletePage(id) {
 function setSyncStatus(s) {
   const el = document.getElementById('status-sync');
   if (!el) return;
-  const map = { syncing: '↻ синхронізація…', synced: '☁ синхронізовано', offline: '○ офлайн', error: '⚠ помилка' };
+  const map = { syncing: '↻ синхронізація…', synced: '☁ синхронізовано', offline: '○ офлайн', error: '⚠ помилка', pending: '● не збережено' };
   el.textContent = map[s] || '';
   el.className = 'sync-badge ' + s;
 }
@@ -359,8 +357,7 @@ function createPage(parentId) {
   }
   saveState();
   fbQueueWrite(page);
-  // Flush immediately so other devices see the new page right away
-  clearTimeout(writeTimer);
+  // Flush immediately — new page must appear on other devices right away
   flushWriteQueue();
   return page;
 }
@@ -385,7 +382,7 @@ function duplicatePage(id) {
   const np = createPage(src.parentId);
   np.title = src.title + ' (копія)'; np.content = src.content; np.format = src.format;
   np.updatedAt = Date.now();
-  saveState(); fbQueueWrite(np);
+  saveState(); fbQueueWrite(np); flushWriteQueue();
   return np;
 }
 
@@ -542,8 +539,9 @@ function showPageActions(id, anchor) {
 }
 
 function saveBranch(id) {
-  if (state.activeId && isInSubtree(state.activeId, id)) saveCurrentEditorToPage();
+  if (state.activeId && isInSubtree(state.activeId, id)) saveCurrentEditorToPage(false);
   collectSubtree(id).forEach(p => writeQueue.add(p.id));
+  setSyncStatus('syncing');
   flushWriteQueue();
 }
 
@@ -649,7 +647,7 @@ function getEditorContent() {
   return activeFormat === 'rich' ? document.getElementById('editor-rich').innerHTML : document.getElementById('editor-plain').value;
 }
 
-function saveCurrentEditorToPage() {
+function saveCurrentEditorToPage(flushRemote = false) {
   const id = state.activeId; if (!id || !state.pages[id]) return;
   const page = state.pages[id];
   page.title   = document.getElementById('page-title').value.trim() || 'Без назви';
@@ -660,9 +658,10 @@ function saveCurrentEditorToPage() {
   fbQueueWrite(page);
   setUnsaved(false);
   renderTree();
-  // Flush immediately on explicit save
-  clearTimeout(writeTimer);
-  flushWriteQueue();
+  if (flushRemote) {
+    setSyncStatus('syncing');
+    flushWriteQueue();
+  }
 }
 
 function setUnsaved(val) {
@@ -771,7 +770,7 @@ function startInlineRename(id) {
       if (state.pages[id]) {
         state.pages[id].title = val; state.pages[id].updatedAt = Date.now();
         if (state.activeId === id) { document.getElementById('page-title').value = val; updateBreadcrumb(id); }
-        saveState(); fbQueueWrite(state.pages[id]);
+        saveState(); fbQueueWrite(state.pages[id]); flushWriteQueue();
       }
       renderTree();
     };
@@ -850,7 +849,7 @@ document.getElementById('file-input').addEventListener('change', e => {
     const ext = file.name.split('.').pop().toLowerCase();
     p.format = ext === 'md' ? 'markdown' : ext === 'html' ? 'rich' : 'auto';
     p.updatedAt = Date.now();
-    expandState[parentId] = true; saveState(); fbQueueWrite(p); renderTree(); openPage(p.id);
+    expandState[parentId] = true; saveState(); fbQueueWrite(p); flushWriteQueue(); renderTree(); openPage(p.id);
   };
   reader.readAsText(file); e.target.value = '';
 });
@@ -874,8 +873,7 @@ document.getElementById('format-select').addEventListener('change', e => {
 });
 
 document.getElementById('btn-save').addEventListener('click', () => {
-  saveCurrentEditorToPage();
-  flushWriteQueue();
+  saveCurrentEditorToPage(true);
 });
 
 document.getElementById('btn-delete-page').addEventListener('click', () => {
@@ -910,10 +908,10 @@ document.getElementById('btn-create-first').addEventListener('click', () => docu
 
 document.getElementById('page-title').addEventListener('input', e => {
   if (state.activeId && state.pages[state.activeId]) { state.pages[state.activeId].title = e.target.value || 'Без назви'; updateBreadcrumb(state.activeId); renderTree(); }
-  unsaved = true;
+  unsaved = true; setSyncStatus('pending');
 });
-document.getElementById('editor-plain').addEventListener('input', () => { unsaved = true; updateWordCount(); if (state.pages[state.activeId]?.format === 'auto') updateStatusFormat(detectFormat(document.getElementById('editor-plain').value)); });
-document.getElementById('editor-rich').addEventListener('input', () => { unsaved = true; updateWordCount(); });
+document.getElementById('editor-plain').addEventListener('input', () => { unsaved = true; setSyncStatus('pending'); updateWordCount(); if (state.pages[state.activeId]?.format === 'auto') updateStatusFormat(detectFormat(document.getElementById('editor-plain').value)); });
+document.getElementById('editor-rich').addEventListener('input', () => { unsaved = true; setSyncStatus('pending'); updateWordCount(); });
 document.getElementById('search-input').addEventListener('input', renderTree);
 
 // ════════════════════════════════════════════════════════════
@@ -921,7 +919,7 @@ document.getElementById('search-input').addEventListener('input', renderTree);
 // ════════════════════════════════════════════════════════════
 document.addEventListener('keydown', e => {
   const mod = e.ctrlKey || e.metaKey;
-  if (mod && e.key === 's') { e.preventDefault(); saveCurrentEditorToPage(); flushWriteQueue(); }
+  if (mod && e.key === 's') { e.preventDefault(); saveCurrentEditorToPage(true); }
   if (mod && e.key === 'n') { e.preventDefault(); document.getElementById('btn-new-page').click(); }
   if (mod && e.shiftKey && e.key === 'P') { e.preventDefault(); togglePreview(); }
 });
@@ -930,8 +928,7 @@ document.addEventListener('keydown', e => {
 //  AUTOSAVE + NETWORK
 // ════════════════════════════════════════════════════════════
 setInterval(() => { if (unsaved && state.activeId) saveCurrentEditorToPage(); }, 15000);
-setInterval(() => { if (writeQueue.size > 0) flushWriteQueue(); }, 10000);
-window.addEventListener('online',  () => { setSyncStatus('syncing'); flushWriteQueue(); });
+window.addEventListener('online',  () => setSyncStatus(writeQueue.size > 0 ? 'pending' : 'synced'));
 window.addEventListener('offline', () => setSyncStatus('offline'));
 
 // ════════════════════════════════════════════════════════════
