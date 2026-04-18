@@ -326,19 +326,21 @@ async function flushWriteQueue() {
   const ids = [...writeQueue];
   writeQueue.clear();
   try {
-    const now = Date.now();
     const batch = db.batch();
+    let maxUpdatedAt = Date.now();
     ids.forEach(id => {
       const p = state.pages[id];
       if (p) {
         localWrites.set(id, p.updatedAt);
         batch.set(pagesCol().doc(id), pageToFirestore(p));
+        if ((p.updatedAt || 0) > maxUpdatedAt) maxUpdatedAt = p.updatedAt;
       }
     });
     await batch.commit();
-    // Update global sync timestamp so other devices know DB changed
-    await metaDoc().set({ lastSync: now });
-    localLastSync = now;
+    // lastSync must be >= all saved pages' updatedAt
+    // so other devices' pull query finds them via where('updatedAt', '>', localLastSync)
+    await metaDoc().set({ lastSync: maxUpdatedAt });
+    localLastSync = maxUpdatedAt;
     setSyncStatus('synced');
   } catch (e) {
     console.warn('flushWriteQueue error', e);
@@ -367,6 +369,7 @@ async function fbDeleteBranch(ids) {
       ids.slice(i, i + 400).forEach(id => batch.delete(pagesCol().doc(id)));
       await batch.commit();
     }
+    // Set lastSync AFTER all deletes so timestamp is fresh
     const now = Date.now();
     await metaDoc().set({ lastSync: now });
     localLastSync = now;
