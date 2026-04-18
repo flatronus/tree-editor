@@ -82,6 +82,7 @@ function onLogin(user) {
   // Load remote data first, then subscribe to changes
   syncFromFirestore().then(() => {
     subscribeFirestore();
+    startPolling();
   });
 }
 
@@ -190,65 +191,54 @@ async function batchUploadAll() {
   setSyncStatus('synced');
 }
 
-// ── Pull changes from DB that are newer than localLastSync ───
+// ── Тягнути зміни з БД якщо вона новіша за localLastSync ────
 async function pullChangesFromDB() {
   if (!fbReady || !currentUid) return;
   try {
-    // Check meta timestamp first
     const meta = await metaDoc().get();
     const raw = meta.exists ? meta.data().lastSync : null;
     const dbLastSync = raw?.toMillis ? raw.toMillis() : (raw || 0);
 
-    if (dbLastSync <= localLastSync) return; // DB not newer — nothing to do
+    if (dbLastSync <= localLastSync) return; // БД не новіша — нічого робити
 
     setSyncStatus('syncing');
 
-    // Pull ALL page ids from DB to detect deletions,
-    // and changed pages (updatedAt > localLastSync) for content updates
-    const [changedSnap, allSnap] = await Promise.all([
-      pagesCol().where('updatedAt', '>', localLastSync).get(),
-      pagesCol().select().get(), // ids only — lightweight
-    ]);
+    // Тягнемо ВСІ сторінки з БД — порівняння по updatedAt ненадійне
+    // бо updatedAt = Date.now() клієнта, а localLastSync = серверний час.
+    const allSnap = await pagesCol().get();
 
     let treeChanged  = false;
     let activeChanged = false;
 
-    // ── Apply changed/new pages ──────────────────────────────
-    changedSnap.forEach(doc => {
+    // ── Застосувати всі сторінки з БД ───────────────────────
+    allSnap.forEach(doc => {
       const id     = doc.id;
       const remote = { ...doc.data(), id, children: [] };
       const local  = state.pages[id];
       const isActiveUnsaved = (id === state.activeId && unsaved);
 
       if (isActiveUnsaved) {
-        state.pages[id] = {
-          ...remote,
-          content:  local ? local.content  : remote.content,
-          children: local ? local.children : [],
-        };
+        // Не перезаписуємо незбережений контент активної сторінки
+        state.pages[id] = { ...remote, content: local.content, children: local.children || [] };
       } else {
+        const changed = !local || local.updatedAt !== remote.updatedAt || local.content !== remote.content || local.title !== remote.title;
         state.pages[id] = { ...remote, children: local ? local.children : [] };
-        if (id === state.activeId) activeChanged = true;
+        if (changed && id === state.activeId) activeChanged = true;
+        if (changed) treeChanged = true;
       }
-      treeChanged = true;
     });
 
-    // ── Detect deleted pages (exist locally but not in DB) ───
+    // ── Видалити сторінки яких немає в БД ───────────────────
     const dbIds = new Set(allSnap.docs.map(d => d.id));
     Object.keys(state.pages).forEach(id => {
-      if (id === ROOT_ID) return; // never delete root locally
+      if (id === ROOT_ID) return;
       if (!dbIds.has(id)) {
-        // Page was deleted on another device
         const page = state.pages[id];
-        if (page && page.parentId && state.pages[page.parentId]) {
-          const par = state.pages[page.parentId];
-          par.children = (par.children || []).filter(c => c !== id);
+        if (page?.parentId && state.pages[page.parentId]) {
+          state.pages[page.parentId].children = (state.pages[page.parentId].children || []).filter(c => c !== id);
         }
         delete state.pages[id];
-        if (state.activeId === id) {
-          state.activeId = ROOT_ID;
-          activeChanged = true;
-        }
+        if (state.activeId === id) { state.activeId = ROOT_ID; activeChanged = true; }
         treeChanged = true;
       }
     });
@@ -273,10 +263,28 @@ async function pullChangesFromDB() {
   }
 }
 
-// ── Polling loop — replaced by onSnapshot on meta doc ────────
-function startPolling() { stopPolling(); }
+// ── Polling loop — резервна перевірка кожні 30с ──────────────
+// onSnapshot може "замовкнути" при нестабільному з'єднанні.
+function startPolling() {
+  stopPolling();
+  pollTimer = setInterval(() => {
+    if (fbReady && currentUid && navigator.onLine) checkMetaAndPull();
+  }, 30000);
+}
 function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+// Перевірити meta і pull якщо БД новіша
+async function checkMetaAndPull() {
+  if (!fbReady || !currentUid) return;
+  try {
+    const meta = await metaDoc().get();
+    if (!meta.exists) return;
+    const raw = meta.data().lastSync;
+    const dbLastSync = raw?.toMillis ? raw.toMillis() : (raw || 0);
+    if (dbLastSync > localLastSync) pullChangesFromDB();
+  } catch (e) { /* тихо — наступна спроба через 30с */ }
 }
 
 // ── Subscribe: watch only meta/sync for changes ───────────────
