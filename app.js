@@ -189,21 +189,26 @@ async function batchUploadAll() {
 }
 
 // ── Pull changes from DB that are newer than localLastSync ───
-async function pullChangesFromDB() {
+async function pullChangesFromDB(dbLastSync) {
   if (!fbReady || !currentUid) return;
   try {
-    // Check meta timestamp first
-    const meta = await metaDoc().get();
-    const dbLastSync = meta.exists ? (meta.data().lastSync || 0) : 0;
+    // If not passed directly, fetch from meta
+    if (dbLastSync === undefined) {
+      const meta = await metaDoc().get();
+      dbLastSync = meta.exists ? (meta.data().lastSync || 0) : 0;
+    }
 
     if (dbLastSync <= localLastSync) return; // DB not newer — nothing to do
 
     setSyncStatus('syncing');
 
+    // Snapshot the threshold before any await so it stays consistent
+    const sinceTs = localLastSync;
+
     // Pull ALL page ids from DB to detect deletions,
-    // and changed pages (updatedAt > localLastSync) for content updates
+    // and changed pages (updatedAt > sinceTs) for content updates
     const [changedSnap, allSnap] = await Promise.all([
-      pagesCol().where('updatedAt', '>', localLastSync).get(),
+      pagesCol().where('updatedAt', '>', sinceTs).get(),
       pagesCol().select().get(), // ids only — lightweight
     ]);
 
@@ -293,7 +298,7 @@ function subscribeFirestore() {
     if (dbLastSync <= localLastSync) return;
 
     // DB is newer — pull changed pages
-    pullChangesFromDB();
+    pullChangesFromDB(dbLastSync);
 
   }, err => {
     console.warn('meta listener error', err.code, err.message);
@@ -350,7 +355,18 @@ async function fbDeletePage(id) {
   if (!fbReady || !currentUid) return;
   try {
     await pagesCol().doc(id).delete();
-    // Update sync timestamp so other devices detect the deletion
+  } catch (e) { console.warn(e); }
+}
+
+// Delete a whole branch in one batch + update meta/sync once
+async function fbDeleteBranch(ids) {
+  if (!fbReady || !currentUid || !ids.length) return;
+  try {
+    for (let i = 0; i < ids.length; i += 400) {
+      const batch = db.batch();
+      ids.slice(i, i + 400).forEach(id => batch.delete(pagesCol().doc(id)));
+      await batch.commit();
+    }
     const now = Date.now();
     await metaDoc().set({ lastSync: now });
     localLastSync = now;
@@ -478,18 +494,30 @@ function createPage(parentId) {
   return page;
 }
 
+function collectPageIds(id, result = []) {
+  const page = state.pages[id]; if (!page) return result;
+  result.push(id);
+  (page.children || []).forEach(c => collectPageIds(c, result));
+  return result;
+}
+
 function deletePage(id) {
   if (id === ROOT_ID) return;
   const page = state.pages[id]; if (!page) return;
-  [...(page.children || [])].forEach(deletePage);
+
+  // Collect all ids in this branch before removing from state
+  const allIds = collectPageIds(id);
+
+  // Remove from parent locally
   const parent = state.pages[page.parentId];
-  if (parent) {
-    parent.children = parent.children.filter(c => c !== id);
-    // No need to write parent to Firestore — child deletion triggers rebuild on all devices
-  }
-  fbDeletePage(id);
-  delete state.pages[id];
+  if (parent) parent.children = parent.children.filter(c => c !== id);
+
+  // Remove all from local state
+  allIds.forEach(pid => { delete state.pages[pid]; });
   saveState();
+
+  // Delete all from Firestore in one batch + update meta/sync once
+  fbDeleteBranch(allIds);
 }
 
 function duplicatePage(id) {
