@@ -189,26 +189,21 @@ async function batchUploadAll() {
 }
 
 // ── Pull changes from DB that are newer than localLastSync ───
-async function pullChangesFromDB(dbLastSync) {
+async function pullChangesFromDB() {
   if (!fbReady || !currentUid) return;
   try {
-    // If not passed directly, fetch from meta
-    if (dbLastSync === undefined) {
-      const meta = await metaDoc().get();
-      dbLastSync = meta.exists ? (meta.data().lastSync || 0) : 0;
-    }
+    // Check meta timestamp first
+    const meta = await metaDoc().get();
+    const dbLastSync = meta.exists ? (meta.data().lastSync || 0) : 0;
 
     if (dbLastSync <= localLastSync) return; // DB not newer — nothing to do
 
     setSyncStatus('syncing');
 
-    // Snapshot the threshold before any await so it stays consistent
-    const sinceTs = localLastSync;
-
     // Pull ALL page ids from DB to detect deletions,
-    // and changed pages (updatedAt > sinceTs) for content updates
+    // and changed pages (updatedAt > localLastSync) for content updates
     const [changedSnap, allSnap] = await Promise.all([
-      pagesCol().where('updatedAt', '>', sinceTs).get(),
+      pagesCol().where('updatedAt', '>', localLastSync).get(),
       pagesCol().select().get(), // ids only — lightweight
     ]);
 
@@ -298,7 +293,7 @@ function subscribeFirestore() {
     if (dbLastSync <= localLastSync) return;
 
     // DB is newer — pull changed pages
-    pullChangesFromDB(dbLastSync);
+    pullChangesFromDB();
 
   }, err => {
     console.warn('meta listener error', err.code, err.message);
@@ -336,6 +331,7 @@ async function flushWriteQueue() {
       }
     });
     await batch.commit();
+    // Update global sync timestamp so other devices know DB changed
     await metaDoc().set({ lastSync: now });
     localLastSync = now;
     setSyncStatus('synced');
@@ -354,6 +350,7 @@ async function fbDeletePage(id) {
   if (!fbReady || !currentUid) return;
   try {
     await pagesCol().doc(id).delete();
+    // Update sync timestamp so other devices detect the deletion
     const now = Date.now();
     await metaDoc().set({ lastSync: now });
     localLastSync = now;
@@ -486,7 +483,10 @@ function deletePage(id) {
   const page = state.pages[id]; if (!page) return;
   [...(page.children || [])].forEach(deletePage);
   const parent = state.pages[page.parentId];
-  if (parent) parent.children = parent.children.filter(c => c !== id);
+  if (parent) {
+    parent.children = parent.children.filter(c => c !== id);
+    // No need to write parent to Firestore — child deletion triggers rebuild on all devices
+  }
   fbDeletePage(id);
   delete state.pages[id];
   saveState();
