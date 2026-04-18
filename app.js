@@ -133,8 +133,8 @@ function applyRemotePages(remoteMap, { fullReplace = false } = {}) {
       return;
     }
 
-    // Local is same age or newer — do not touch it
-    if ((local.updatedAt || 0) >= (remote.updatedAt || 0)) return;
+    // Local is strictly newer — do not touch it
+    if (local && (local.updatedAt || 0) > (remote.updatedAt || 0)) return;
 
     // Remote is newer — apply selectively
     const isEditing = (id === state.activeId && unsaved);
@@ -255,11 +255,8 @@ function subscribeFirestore() {
       }
       localWrites.delete(id);
 
-      // Skip if local version is already same age or newer
-      const localTs = state.pages[id]?.updatedAt || 0;
-      if (remoteTs && localTs >= remoteTs) return;
-
-      // Genuine change from another device — queue for apply
+      // Genuine change from another device — always queue for apply.
+      // Timestamp comparison happens inside applyRemotePages.
       toApply[id] = { ...change.doc.data(), id, children: [] };
       hasChanges = true;
     });
@@ -274,16 +271,9 @@ function subscribeFirestore() {
     saveLocalOnly();
     renderTree();
 
-    // Refresh editor only if active page changed from remote AND
-    // remote is genuinely newer than what user has locally
-    if (state.activeId && state.pages[state.activeId] && !unsaved) {
-      const applied = toApply[state.activeId];
-      if (applied) {
-        const localTs = state.pages[state.activeId]?.updatedAt || 0;
-        if ((applied.updatedAt || 0) >= localTs) {
-          reloadEditorContent(state.pages[state.activeId]);
-        }
-      }
+    // Refresh editor if active page was updated from remote and user has no unsaved edits
+    if (!unsaved && state.activeId && toApply[state.activeId] && state.pages[state.activeId]) {
+      reloadEditorContent(state.pages[state.activeId]);
     }
 
     setSyncStatus('synced');
