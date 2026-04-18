@@ -160,7 +160,8 @@ async function syncFromFirestore() {
       // Record sync time from meta
       try {
         const meta = await metaDoc().get();
-        localLastSync = meta.exists ? (meta.data().lastSync || 0) : 0;
+        const raw = meta.exists ? meta.data().lastSync : null;
+        localLastSync = raw?.toMillis ? raw.toMillis() : (raw || Date.now());
       } catch (_) { localLastSync = Date.now(); }
       setSyncStatus('synced');
     } else {
@@ -183,8 +184,9 @@ async function batchUploadAll() {
     pages.slice(i, i + 400).forEach(p => batch.set(pagesCol().doc(p.id), pageToFirestore(p)));
     await batch.commit();
   }
-  await metaDoc().set({ lastSync: now });
-  localLastSync = now;
+  await metaDoc().set({ lastSync: firebase.firestore.FieldValue.serverTimestamp() });
+  const metaSnap = await metaDoc().get();
+  localLastSync = metaSnap.exists ? (metaSnap.data().lastSync?.toMillis?.() || Date.now()) : Date.now();
   setSyncStatus('synced');
 }
 
@@ -194,7 +196,8 @@ async function pullChangesFromDB() {
   try {
     // Check meta timestamp first
     const meta = await metaDoc().get();
-    const dbLastSync = meta.exists ? (meta.data().lastSync || 0) : 0;
+    const raw = meta.exists ? meta.data().lastSync : null;
+    const dbLastSync = raw?.toMillis ? raw.toMillis() : (raw || 0);
 
     if (dbLastSync <= localLastSync) return; // DB not newer — nothing to do
 
@@ -287,9 +290,11 @@ function subscribeFirestore() {
 
   fbUnsub = metaDoc().onSnapshot({ includeMetadataChanges: false }, snap => {
     if (!snap.exists) return;
-    const dbLastSync = snap.data().lastSync || 0;
+    const raw = snap.data().lastSync;
+    // lastSync може бути Timestamp (serverTimestamp) або число (legacy)
+    const dbLastSync = raw?.toMillis ? raw.toMillis() : (raw || 0);
 
-    // Skip if this is our own save (we just set localLastSync = now)
+    // Skip if this is our own save (we just set localLastSync = dbLastSync after write)
     if (dbLastSync <= localLastSync) return;
 
     // DB is newer — pull changed pages
@@ -321,7 +326,6 @@ async function flushWriteQueue() {
   const ids = [...writeQueue];
   writeQueue.clear();
   try {
-    const now = Date.now();
     const batch = db.batch();
     ids.forEach(id => {
       const p = state.pages[id];
@@ -331,9 +335,11 @@ async function flushWriteQueue() {
       }
     });
     await batch.commit();
-    // Update global sync timestamp so other devices know DB changed
-    await metaDoc().set({ lastSync: now });
-    localLastSync = now;
+    // Use serverTimestamp so all devices compare against the same clock
+    await metaDoc().set({ lastSync: firebase.firestore.FieldValue.serverTimestamp() });
+    // Read back the actual server timestamp so our localLastSync matches exactly
+    const metaSnap = await metaDoc().get();
+    localLastSync = metaSnap.exists ? (metaSnap.data().lastSync?.toMillis?.() || Date.now()) : Date.now();
     setSyncStatus('synced');
   } catch (e) {
     console.warn('flushWriteQueue error', e);
@@ -351,9 +357,9 @@ async function fbDeletePage(id) {
   try {
     await pagesCol().doc(id).delete();
     // Update sync timestamp so other devices detect the deletion
-    const now = Date.now();
-    await metaDoc().set({ lastSync: now });
-    localLastSync = now;
+    await metaDoc().set({ lastSync: firebase.firestore.FieldValue.serverTimestamp() });
+    const metaSnap = await metaDoc().get();
+    localLastSync = metaSnap.exists ? (metaSnap.data().lastSync?.toMillis?.() || Date.now()) : Date.now();
   } catch (e) { console.warn(e); }
 }
 
