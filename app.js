@@ -200,43 +200,64 @@ async function pullChangesFromDB() {
 
     setSyncStatus('syncing');
 
-    // Pull only pages updated after our last sync
-    const snap = await pagesCol()
-      .where('updatedAt', '>', localLastSync)
-      .get();
+    // Pull ALL page ids from DB to detect deletions,
+    // and changed pages (updatedAt > localLastSync) for content updates
+    const [changedSnap, allSnap] = await Promise.all([
+      pagesCol().where('updatedAt', '>', localLastSync).get(),
+      pagesCol().select().get(), // ids only — lightweight
+    ]);
 
-    if (!snap.empty) {
-      let treeChanged  = false;
-      let activeChanged = false;
+    let treeChanged  = false;
+    let activeChanged = false;
 
-      snap.forEach(doc => {
-        const id     = doc.id;
-        const remote = { ...doc.data(), id, children: [] };
-        const local  = state.pages[id];
-        const isActiveUnsaved = (id === state.activeId && unsaved);
+    // ── Apply changed/new pages ──────────────────────────────
+    changedSnap.forEach(doc => {
+      const id     = doc.id;
+      const remote = { ...doc.data(), id, children: [] };
+      const local  = state.pages[id];
+      const isActiveUnsaved = (id === state.activeId && unsaved);
 
-        if (isActiveUnsaved) {
-          // User is typing — keep content, apply structure
-          state.pages[id] = {
-            ...remote,
-            content:  local ? local.content  : remote.content,
-            children: local ? local.children : [],
-          };
-        } else {
-          state.pages[id] = { ...remote, children: local ? local.children : [] };
-          if (id === state.activeId) activeChanged = true;
+      if (isActiveUnsaved) {
+        state.pages[id] = {
+          ...remote,
+          content:  local ? local.content  : remote.content,
+          children: local ? local.children : [],
+        };
+      } else {
+        state.pages[id] = { ...remote, children: local ? local.children : [] };
+        if (id === state.activeId) activeChanged = true;
+      }
+      treeChanged = true;
+    });
+
+    // ── Detect deleted pages (exist locally but not in DB) ───
+    const dbIds = new Set(allSnap.docs.map(d => d.id));
+    Object.keys(state.pages).forEach(id => {
+      if (id === ROOT_ID) return; // never delete root locally
+      if (!dbIds.has(id)) {
+        // Page was deleted on another device
+        const page = state.pages[id];
+        if (page && page.parentId && state.pages[page.parentId]) {
+          const par = state.pages[page.parentId];
+          par.children = (par.children || []).filter(c => c !== id);
+        }
+        delete state.pages[id];
+        if (state.activeId === id) {
+          state.activeId = ROOT_ID;
+          activeChanged = true;
         }
         treeChanged = true;
-      });
+      }
+    });
 
-      if (treeChanged) {
-        ensureRoot();
-        rebuildChildrenFromParentId();
-        saveLocalOnly();
-        renderTree();
-        if (activeChanged && state.pages[state.activeId]) {
-          reloadEditorContent(state.pages[state.activeId]);
-        }
+    if (treeChanged) {
+      ensureRoot();
+      rebuildChildrenFromParentId();
+      saveLocalOnly();
+      renderTree();
+      if (activeChanged) {
+        if (state.pages[state.activeId]) reloadEditorContent(state.pages[state.activeId]);
+        else openPage(ROOT_ID);
       }
     }
 
@@ -327,7 +348,13 @@ async function flushWriteQueue() {
 
 async function fbDeletePage(id) {
   if (!fbReady || !currentUid) return;
-  try { await pagesCol().doc(id).delete(); } catch (e) { console.warn(e); }
+  try {
+    await pagesCol().doc(id).delete();
+    // Update sync timestamp so other devices detect the deletion
+    const now = Date.now();
+    await metaDoc().set({ lastSync: now });
+    localLastSync = now;
+  } catch (e) { console.warn(e); }
 }
 
 function setSyncStatus(s, detail) {
