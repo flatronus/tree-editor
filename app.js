@@ -130,7 +130,7 @@ async function syncFromFirestore() {
     }
   } catch (e) {
     console.warn('syncFromFirestore error', e);
-    setSyncStatus('error');
+    setSyncStatus('error', e.code || e.message);
   }
 }
 
@@ -218,7 +218,7 @@ function subscribeFirestore() {
 
   }, err => {
     console.warn('Firestore listener error', err.code, err.message);
-    setSyncStatus(navigator.onLine ? 'error' : 'offline');
+    setSyncStatus(navigator.onLine ? 'error' : 'offline', err.code || err.message);
   });
 }
 
@@ -257,7 +257,7 @@ async function flushWriteQueue() {
   } catch (e) {
     console.warn('flushWriteQueue error', e);
     ids.forEach(id => { writeQueue.add(id); localWrites.delete(id); });
-    setSyncStatus('error');
+    setSyncStatus('error', e.code || e.message);
     setTimeout(flushWriteQueue, 5000);
   }
 }
@@ -267,11 +267,11 @@ async function fbDeletePage(id) {
   try { await pagesCol().doc(id).delete(); } catch (e) { console.warn(e); }
 }
 
-function setSyncStatus(s) {
+function setSyncStatus(s, detail) {
   const el = document.getElementById('status-sync');
   if (!el) return;
   const map = { syncing: '↻ синхронізація…', synced: '☁ синхронізовано', offline: '○ офлайн', error: '⚠ помилка', pending: '● не збережено' };
-  el.textContent = map[s] || '';
+  el.textContent = (map[s] || '') + (detail ? ': ' + detail : '');
   el.className = 'sync-badge ' + s;
 }
 
