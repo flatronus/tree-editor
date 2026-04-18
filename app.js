@@ -87,6 +87,7 @@ function onLogin(user) {
 
 function onLogout() {
   if (fbUnsub) { fbUnsub(); fbUnsub = null; }
+  stopPolling();
   document.getElementById('app').classList.add('hidden');
   document.getElementById('auth-overlay').classList.remove('hidden');
   // Show login form (not spinner)
@@ -97,15 +98,26 @@ function onLogout() {
 // ════════════════════════════════════════════════════════════
 //  FIRESTORE — user-scoped path: users/{uid}/pages/{id}
 //
-//  SYNC RULES:
-//  Device → DB : only on explicit Save (button / Ctrl+S)
-//  DB → Device : always, on every snapshot change
-//                only exception: content of the page the user
-//                is currently typing in is never overwritten
+//  SYNC MODEL:
+//  • Device → DB : only on explicit Save (button / Ctrl+S)
+//    After saving, writes timestamp to users/{uid}/meta {lastSync}
+//
+//  • DB → Device : polling loop every 30s checks meta.lastSync
+//    If DB lastSync > local lastSync → pull all changed pages
+//    (pages where updatedAt > localLastSync)
+//
+//  • On app open : full pull from DB (source of truth)
 // ════════════════════════════════════════════════════════════
 function pagesCol() {
   return db.collection('users').doc(currentUid).collection('pages');
 }
+function metaDoc() {
+  return db.collection('users').doc(currentUid).collection('meta').doc('sync');
+}
+
+// Local timestamp of last successful sync from DB
+let localLastSync = 0;
+let pollTimer     = null;
 
 // ── Initial load ─────────────────────────────────────────────
 async function syncFromFirestore() {
@@ -117,24 +129,21 @@ async function syncFromFirestore() {
       state.pages = {};
       snap.forEach(doc => {
         const data = { ...doc.data(), id: doc.id, children: [] };
-        // Migrate old reserved id __root__ → root
         if (doc.id === '__root__') {
           data.id = ROOT_ID;
           state.pages[ROOT_ID] = data;
         } else {
-          // Fix any parentId that points to old __root__
           if (data.parentId === '__root__') data.parentId = ROOT_ID;
           state.pages[doc.id] = data;
         }
       });
-      // If old __root__ doc existed, delete it and write new root
+      // Migrate old __root__ document if present
       if (snap.docs.some(d => d.id === '__root__')) {
         try {
           await pagesCol().doc('__root__').delete();
           if (state.pages[ROOT_ID]) {
             await pagesCol().doc(ROOT_ID).set(pageToFirestore(state.pages[ROOT_ID]));
           }
-          // Fix parentId references in DB
           const fixBatch = db.batch();
           Object.values(state.pages).forEach(p => {
             if (p.id !== ROOT_ID) fixBatch.set(pagesCol().doc(p.id), pageToFirestore(p));
@@ -148,6 +157,11 @@ async function syncFromFirestore() {
       renderTree();
       if (state.activeId && state.pages[state.activeId]) openPage(state.activeId);
       else openPage(ROOT_ID);
+      // Record sync time from meta
+      try {
+        const meta = await metaDoc().get();
+        localLastSync = meta.exists ? (meta.data().lastSync || 0) : 0;
+      } catch (_) { localLastSync = Date.now(); }
       setSyncStatus('synced');
     } else {
       await batchUploadAll();
@@ -163,85 +177,105 @@ async function batchUploadAll() {
   const pages = Object.values(state.pages);
   if (!pages.length) { setSyncStatus('synced'); return; }
   setSyncStatus('syncing');
+  const now = Date.now();
   for (let i = 0; i < pages.length; i += 400) {
     const batch = db.batch();
     pages.slice(i, i + 400).forEach(p => batch.set(pagesCol().doc(p.id), pageToFirestore(p)));
     await batch.commit();
   }
+  await metaDoc().set({ lastSync: now });
+  localLastSync = now;
   setSyncStatus('synced');
 }
 
-// ── Real-time listener: DB → Device ──────────────────────────
-function subscribeFirestore() {
+// ── Pull changes from DB that are newer than localLastSync ───
+async function pullChangesFromDB() {
   if (!fbReady || !currentUid) return;
-  if (fbUnsub) fbUnsub();
+  try {
+    // Check meta timestamp first
+    const meta = await metaDoc().get();
+    const dbLastSync = meta.exists ? (meta.data().lastSync || 0) : 0;
 
-  fbUnsub = pagesCol().onSnapshot({ includeMetadataChanges: false }, snap => {
-    let treeChanged = false;
-    let activeChanged = false;
+    if (dbLastSync <= localLastSync) return; // DB not newer — nothing to do
 
-    snap.docChanges().forEach(change => {
-      const id = change.doc.id;
+    setSyncStatus('syncing');
 
-      // ── Delete ───────────────────────────────────────────
-      if (change.type === 'removed') {
-        if (id !== ROOT_ID && state.pages[id]) {
-          const p = state.pages[id];
-          if (p.parentId && state.pages[p.parentId]) {
-            const par = state.pages[p.parentId];
-            par.children = (par.children || []).filter(c => c !== id);
-          }
-          delete state.pages[id];
-          treeChanged = true;
+    // Pull only pages updated after our last sync
+    const snap = await pagesCol()
+      .where('updatedAt', '>', localLastSync)
+      .get();
+
+    if (!snap.empty) {
+      let treeChanged  = false;
+      let activeChanged = false;
+
+      snap.forEach(doc => {
+        const id     = doc.id;
+        const remote = { ...doc.data(), id, children: [] };
+        const local  = state.pages[id];
+        const isActiveUnsaved = (id === state.activeId && unsaved);
+
+        if (isActiveUnsaved) {
+          // User is typing — keep content, apply structure
+          state.pages[id] = {
+            ...remote,
+            content:  local ? local.content  : remote.content,
+            children: local ? local.children : [],
+          };
+        } else {
+          state.pages[id] = { ...remote, children: local ? local.children : [] };
+          if (id === state.activeId) activeChanged = true;
         }
-        return;
+        treeChanged = true;
+      });
+
+      if (treeChanged) {
+        ensureRoot();
+        rebuildChildrenFromParentId();
+        saveLocalOnly();
+        renderTree();
+        if (activeChanged && state.pages[state.activeId]) {
+          reloadEditorContent(state.pages[state.activeId]);
+        }
       }
-
-      // ── Our own write echo — skip ─────────────────────────
-      const remoteTs = change.doc.data().updatedAt;
-      const ourTs    = localWrites.get(id);
-      if (ourTs !== undefined && remoteTs === ourTs) {
-        localWrites.delete(id);
-        return;
-      }
-      localWrites.delete(id);
-
-      // ── Remote change from another device ─────────────────
-      const remote = { ...change.doc.data(), id, children: [] };
-      const local  = state.pages[id];
-      const isActiveUnsaved = (id === state.activeId && unsaved);
-
-      if (isActiveUnsaved) {
-        // User is typing here — keep their content, apply everything else
-        state.pages[id] = {
-          ...remote,
-          content:  local ? local.content  : remote.content,
-          children: local ? local.children : [],
-        };
-        // Don't reload editor — user is typing
-      } else {
-        state.pages[id] = { ...remote, children: local ? local.children : [] };
-        if (id === state.activeId) activeChanged = true;
-      }
-
-      treeChanged = true;
-    });
-
-    if (!treeChanged) return;
-
-    ensureRoot();
-    rebuildChildrenFromParentId();
-    saveLocalOnly();
-    renderTree();
-
-    if (activeChanged && state.pages[state.activeId]) {
-      reloadEditorContent(state.pages[state.activeId]);
     }
 
+    localLastSync = dbLastSync;
     setSyncStatus('synced');
 
+  } catch (e) {
+    console.warn('pullChangesFromDB error', e.code, e.message);
+    setSyncStatus(navigator.onLine ? 'error' : 'offline', e.code || e.message);
+  }
+}
+
+// ── Polling loop — replaced by onSnapshot on meta doc ────────
+function startPolling() { stopPolling(); }
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+// ── Subscribe: watch only meta/sync for changes ───────────────
+// meta/sync is a single tiny document {lastSync: timestamp}.
+// When another device saves, it updates lastSync → this fires
+// instantly → we pull only the changed pages. This gives
+// real-time sync without polling and without the echo problem
+// of watching the full pages collection.
+function subscribeFirestore() {
+  if (fbUnsub) { fbUnsub(); fbUnsub = null; }
+
+  fbUnsub = metaDoc().onSnapshot({ includeMetadataChanges: false }, snap => {
+    if (!snap.exists) return;
+    const dbLastSync = snap.data().lastSync || 0;
+
+    // Skip if this is our own save (we just set localLastSync = now)
+    if (dbLastSync <= localLastSync) return;
+
+    // DB is newer — pull changed pages
+    pullChangesFromDB();
+
   }, err => {
-    console.warn('Firestore listener error', err.code, err.message);
+    console.warn('meta listener error', err.code, err.message);
     setSyncStatus(navigator.onLine ? 'error' : 'offline', err.code || err.message);
   });
 }
@@ -266,23 +300,24 @@ async function flushWriteQueue() {
   const ids = [...writeQueue];
   writeQueue.clear();
   try {
+    const now = Date.now();
     const batch = db.batch();
     ids.forEach(id => {
       const p = state.pages[id];
       if (p) {
-        // Register BEFORE commit — onSnapshot echo can arrive before
-        // await returns, so the guard must already be in place.
         localWrites.set(id, p.updatedAt);
         batch.set(pagesCol().doc(id), pageToFirestore(p));
       }
     });
     await batch.commit();
+    // Update global sync timestamp so other devices know DB changed
+    await metaDoc().set({ lastSync: now });
+    localLastSync = now;
     setSyncStatus('synced');
   } catch (e) {
     console.warn('flushWriteQueue error', e);
     ids.forEach(id => { writeQueue.add(id); localWrites.delete(id); });
     setSyncStatus('error', e.code || e.message);
-    // Don't retry on permanent errors (invalid id, permission, etc.)
     const permanent = ['invalid-argument', 'permission-denied', 'unauthenticated', 'not-found'];
     if (!permanent.includes(e.code)) {
       setTimeout(flushWriteQueue, 5000);
