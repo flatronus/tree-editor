@@ -111,9 +111,12 @@ function pagesCol() {
 
 // ── Helpers ─────────────────────────────────────────────────
 
-// Apply a set of remote pages to local state and refresh UI.
-// Pages the user is currently editing are protected — only
-// metadata (title, parentId, format) is updated, content is kept.
+// Apply remote changes to local state using updatedAt timestamps.
+// Rules per page:
+//   • remote.updatedAt <= local.updatedAt  → local is newer, skip entirely
+//   • remote.updatedAt >  local.updatedAt  → remote is newer:
+//       - always apply structural fields (title, parentId, format)
+//       - apply content ONLY if user is not actively editing that page
 function applyRemotePages(remoteMap, { fullReplace = false } = {}) {
   if (fullReplace) {
     state.pages = {};
@@ -123,13 +126,32 @@ function applyRemotePages(remoteMap, { fullReplace = false } = {}) {
     const id = remote.id;
     if (!id) return;
     const local = state.pages[id];
+
+    // No local version — just take remote as-is
+    if (!local) {
+      state.pages[id] = { ...remote, children: [] };
+      return;
+    }
+
+    // Local is same age or newer — do not touch it
+    if ((local.updatedAt || 0) >= (remote.updatedAt || 0)) return;
+
+    // Remote is newer — apply selectively
     const isEditing = (id === state.activeId && unsaved);
 
     if (isEditing) {
-      // Keep local content; accept remote structural fields
-      state.pages[id] = { ...remote, content: local.content, children: local.children || [] };
+      // User is typing here right now — keep content, take only metadata
+      state.pages[id] = {
+        ...local,
+        title:    remote.title,
+        parentId: remote.parentId,
+        format:   remote.format,
+        updatedAt: remote.updatedAt,
+        children: local.children || [],
+      };
     } else {
-      state.pages[id] = { ...remote, children: local ? local.children : [] };
+      // Safe to apply everything
+      state.pages[id] = { ...remote, children: local.children || [] };
     }
   });
 
@@ -233,6 +255,10 @@ function subscribeFirestore() {
       }
       localWrites.delete(id);
 
+      // Skip if local version is already same age or newer
+      const localTs = state.pages[id]?.updatedAt || 0;
+      if (remoteTs && localTs >= remoteTs) return;
+
       // Genuine change from another device — queue for apply
       toApply[id] = { ...change.doc.data(), id, children: [] };
       hasChanges = true;
@@ -248,11 +274,15 @@ function subscribeFirestore() {
     saveLocalOnly();
     renderTree();
 
-    // Refresh editor only if active page changed from remote
-    // and user has no unsaved edits
+    // Refresh editor only if active page changed from remote AND
+    // remote is genuinely newer than what user has locally
     if (state.activeId && state.pages[state.activeId] && !unsaved) {
-      if (toApply[state.activeId]) {
-        reloadEditorContent(state.pages[state.activeId]);
+      const applied = toApply[state.activeId];
+      if (applied) {
+        const localTs = state.pages[state.activeId]?.updatedAt || 0;
+        if ((applied.updatedAt || 0) >= localTs) {
+          reloadEditorContent(state.pages[state.activeId]);
+        }
       }
     }
 
