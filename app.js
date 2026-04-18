@@ -2,7 +2,7 @@
 //  ARKHIV — app.js
 // ════════════════════════════════════════════════════════════
 
-const ROOT_ID = '__root__';
+const ROOT_ID = 'root';
 const LS_KEY  = 'arkhiv_v3';
 const LS_SW   = 'arkhiv-sidebar-w';
 const LS_SO   = 'arkhiv-sidebar-open';
@@ -116,8 +116,32 @@ async function syncFromFirestore() {
     if (!snap.empty) {
       state.pages = {};
       snap.forEach(doc => {
-        state.pages[doc.id] = { ...doc.data(), id: doc.id, children: [] };
+        const data = { ...doc.data(), id: doc.id, children: [] };
+        // Migrate old reserved id __root__ → root
+        if (doc.id === '__root__') {
+          data.id = ROOT_ID;
+          state.pages[ROOT_ID] = data;
+        } else {
+          // Fix any parentId that points to old __root__
+          if (data.parentId === '__root__') data.parentId = ROOT_ID;
+          state.pages[doc.id] = data;
+        }
       });
+      // If old __root__ doc existed, delete it and write new root
+      if (snap.docs.some(d => d.id === '__root__')) {
+        try {
+          await pagesCol().doc('__root__').delete();
+          if (state.pages[ROOT_ID]) {
+            await pagesCol().doc(ROOT_ID).set(pageToFirestore(state.pages[ROOT_ID]));
+          }
+          // Fix parentId references in DB
+          const fixBatch = db.batch();
+          Object.values(state.pages).forEach(p => {
+            if (p.id !== ROOT_ID) fixBatch.set(pagesCol().doc(p.id), pageToFirestore(p));
+          });
+          await fixBatch.commit();
+        } catch (me) { console.warn('migration error', me); }
+      }
       ensureRoot();
       rebuildChildrenFromParentId();
       saveLocalOnly();
@@ -258,7 +282,11 @@ async function flushWriteQueue() {
     console.warn('flushWriteQueue error', e);
     ids.forEach(id => { writeQueue.add(id); localWrites.delete(id); });
     setSyncStatus('error', e.code || e.message);
-    setTimeout(flushWriteQueue, 5000);
+    // Don't retry on permanent errors (invalid id, permission, etc.)
+    const permanent = ['invalid-argument', 'permission-denied', 'unauthenticated', 'not-found'];
+    if (!permanent.includes(e.code)) {
+      setTimeout(flushWriteQueue, 5000);
+    }
   }
 }
 
@@ -312,7 +340,20 @@ function saveState() { saveLocalOnly(); }
 function loadState() {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    if (raw) { const p = JSON.parse(raw); state.pages = p.pages || {}; state.activeId = p.activeId || null; }
+    if (raw) {
+      const p = JSON.parse(raw);
+      state.pages = p.pages || {};
+      state.activeId = p.activeId || null;
+      // Migrate old reserved id
+      if (state.pages['__root__']) {
+        state.pages[ROOT_ID] = { ...state.pages['__root__'], id: ROOT_ID };
+        delete state.pages['__root__'];
+      }
+      if (state.activeId === '__root__') state.activeId = ROOT_ID;
+      Object.values(state.pages).forEach(p => {
+        if (p.parentId === '__root__') p.parentId = ROOT_ID;
+      });
+    }
   } catch (e) { console.warn(e); }
 }
 
