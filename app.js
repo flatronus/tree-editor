@@ -708,8 +708,6 @@ function openPage(id) {
   updateWordCount();
   setUnsaved(false);
   renderTree();
-
-  if (window.innerWidth <= 700) setSidebarOpen(false);
 }
 
 function reloadEditorContent(page) {
