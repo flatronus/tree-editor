@@ -326,21 +326,18 @@ async function flushWriteQueue() {
   const ids = [...writeQueue];
   writeQueue.clear();
   try {
+    const now = Date.now();
     const batch = db.batch();
-    let maxUpdatedAt = Date.now();
     ids.forEach(id => {
       const p = state.pages[id];
       if (p) {
         localWrites.set(id, p.updatedAt);
         batch.set(pagesCol().doc(id), pageToFirestore(p));
-        if ((p.updatedAt || 0) > maxUpdatedAt) maxUpdatedAt = p.updatedAt;
       }
     });
     await batch.commit();
-    // lastSync must be >= all saved pages' updatedAt
-    // so other devices' pull query finds them via where('updatedAt', '>', localLastSync)
-    await metaDoc().set({ lastSync: maxUpdatedAt });
-    localLastSync = maxUpdatedAt;
+    await metaDoc().set({ lastSync: now });
+    localLastSync = now;
     setSyncStatus('synced');
   } catch (e) {
     console.warn('flushWriteQueue error', e);
@@ -357,19 +354,6 @@ async function fbDeletePage(id) {
   if (!fbReady || !currentUid) return;
   try {
     await pagesCol().doc(id).delete();
-  } catch (e) { console.warn(e); }
-}
-
-// Delete a whole branch in one batch + update meta/sync once
-async function fbDeleteBranch(ids) {
-  if (!fbReady || !currentUid || !ids.length) return;
-  try {
-    for (let i = 0; i < ids.length; i += 400) {
-      const batch = db.batch();
-      ids.slice(i, i + 400).forEach(id => batch.delete(pagesCol().doc(id)));
-      await batch.commit();
-    }
-    // Set lastSync AFTER all deletes so timestamp is fresh
     const now = Date.now();
     await metaDoc().set({ lastSync: now });
     localLastSync = now;
@@ -497,30 +481,15 @@ function createPage(parentId) {
   return page;
 }
 
-function collectPageIds(id, result = []) {
-  const page = state.pages[id]; if (!page) return result;
-  result.push(id);
-  (page.children || []).forEach(c => collectPageIds(c, result));
-  return result;
-}
-
 function deletePage(id) {
   if (id === ROOT_ID) return;
   const page = state.pages[id]; if (!page) return;
-
-  // Collect all ids in this branch before removing from state
-  const allIds = collectPageIds(id);
-
-  // Remove from parent locally
+  [...(page.children || [])].forEach(deletePage);
   const parent = state.pages[page.parentId];
   if (parent) parent.children = parent.children.filter(c => c !== id);
-
-  // Remove all from local state
-  allIds.forEach(pid => { delete state.pages[pid]; });
+  fbDeletePage(id);
+  delete state.pages[id];
   saveState();
-
-  // Delete all from Firestore in one batch + update meta/sync once
-  fbDeleteBranch(allIds);
 }
 
 function duplicatePage(id) {
