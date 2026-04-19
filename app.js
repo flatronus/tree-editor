@@ -812,32 +812,83 @@ function pageToHtml(page) {
 
 function exportBranchPDF(id) {
   const pages = collectSubtree(id);
-  const styles = `<style>
-    body{font-family:Georgia,serif;color:#111;font-size:11pt;line-height:1.75;margin:0;padding:0}
-    h1{font-size:15pt;font-weight:500;color:#1a1a2e;margin:14pt 0 3pt;border-bottom:1pt solid #4A90D9;padding-bottom:3pt}
-    h2{font-size:13pt;color:#2563a8;margin:11pt 0 3pt} h3{font-size:11pt;color:#4a5568;margin:8pt 0 2pt}
-    p{margin:4pt 0}ul,ol{padding-left:16pt;margin:4pt 0}
-    pre{background:#f5f7fa;border:0.5pt solid #e2e8f0;padding:6pt 9pt;white-space:pre-wrap;font-size:9pt;font-family:monospace}
-    code{background:#f0f2f5;padding:1pt 3pt;font-family:monospace;font-size:9pt;color:#c7254e}
-    blockquote{border-left:2pt solid #4A90D9;margin:6pt 0;padding-left:9pt;color:#4a5568;font-style:italic}
-    table{width:100%;border-collapse:collapse;margin:6pt 0}th{background:#eef2f8;border:0.5pt solid #cbd5e1;padding:3pt 6pt;font-weight:500}td{border:0.5pt solid #e2e8f0;padding:3pt 6pt}
-    hr{border:none;border-top:0.5pt solid #e2e8f0;margin:10pt 0 7pt}
-    .crumb{font-size:8pt;color:#94a3b8;margin-bottom:1pt;font-family:monospace}
-  </style>`;
+  const filename = (state.pages[id]?.title || 'export').replace(/[<>:"/\\|?*]/g, '_');
+
   let body = '';
   pages.forEach((page, i) => {
-    body += (i > 0 ? '<hr>' : '') + `<div class="crumb">${getBreadcrumb(page.id)}</div><h1>${page.title}</h1>` + pageToHtml(page);
+    body += (i > 0 ? '<div class="page-break"></div>' : '')
+      + `<div class="crumb">${getBreadcrumb(page.id)}</div>`
+      + `<h1>${page.title}</h1>`
+      + pageToHtml(page);
   });
-  const el = document.createElement('div');
-  el.style.cssText = 'padding:10mm 12mm;background:#fff';
-  el.innerHTML = styles + body;
-  if (typeof html2pdf !== 'undefined') {
-    html2pdf().set({ margin:[10,12,10,12], filename:(state.pages[id]?.title||'export')+'.pdf', html2canvas:{scale:2,useCORS:true}, jsPDF:{unit:'mm',format:'a4'}, pagebreak:{mode:['avoid-all','css']} }).from(el).save();
-  } else {
-    const w = window.open('', '_blank');
-    w.document.write('<!DOCTYPE html><html><body>' + el.innerHTML + '</body></html>');
-    w.document.close(); setTimeout(() => w.print(), 700);
+
+  const html = `<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<title>${filename}</title>
+<style>
+  @page { size: A4; margin: 18mm 20mm 18mm 20mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 11pt; line-height: 1.75;
+    color: #111; background: #fff;
+    margin: 0; padding: 0;
   }
+  h1 { font-size: 15pt; font-weight: 600; color: #1a1a2e; margin: 16pt 0 4pt; padding-bottom: 3pt; border-bottom: 1pt solid #4A90D9; }
+  h2 { font-size: 13pt; color: #2563a8; margin: 12pt 0 3pt; }
+  h3 { font-size: 11pt; color: #4a5568; margin: 9pt 0 2pt; }
+  p  { margin: 4pt 0; }
+  ul, ol { padding-left: 18pt; margin: 4pt 0; }
+  li { margin: 2pt 0; }
+  pre {
+    background: #f5f7fa; border: 0.5pt solid #e2e8f0;
+    padding: 7pt 10pt; white-space: pre-wrap;
+    font-size: 9pt; font-family: 'Courier New', monospace;
+    border-radius: 3pt; page-break-inside: avoid;
+  }
+  code { background: #f0f2f5; padding: 1pt 3pt; font-family: 'Courier New', monospace; font-size: 9pt; color: #c7254e; }
+  blockquote { border-left: 2pt solid #4A90D9; margin: 6pt 0; padding: 2pt 0 2pt 10pt; color: #4a5568; font-style: italic; }
+  table { width: 100%; border-collapse: collapse; margin: 6pt 0; page-break-inside: avoid; }
+  th { background: #eef2f8; border: 0.5pt solid #cbd5e1; padding: 4pt 7pt; font-weight: 600; text-align: left; }
+  td { border: 0.5pt solid #e2e8f0; padding: 4pt 7pt; }
+  hr { border: none; border-top: 0.5pt solid #d1d9e6; margin: 12pt 0; }
+  a  { color: #2563a8; }
+  .crumb { font-size: 8pt; color: #94a3b8; font-family: 'Courier New', monospace; margin-bottom: 2pt; }
+  .page-break { page-break-before: always; margin: 0; }
+  @media print {
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    h1, h2, h3 { page-break-after: avoid; }
+    pre, table, blockquote { page-break-inside: avoid; }
+  }
+</style>
+</head>
+<body>${body}</body>
+</html>`;
+
+  // Відкриваємо у прихованому iframe і викликаємо print() —
+  // браузер зберігає справжній текстовий PDF (не растр).
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;border:none;';
+  document.body.appendChild(iframe);
+
+  iframe.onload = () => {
+    try {
+      // Встановлюємо назву документа щоб браузер запропонував правильне ім'я файлу
+      iframe.contentDocument.title = filename;
+      iframe.contentWindow.focus();
+      iframe.contentWindow.print();
+    } finally {
+      // Прибираємо iframe і звільняємо blob після невеликої затримки
+      setTimeout(() => { document.body.removeChild(iframe); URL.revokeObjectURL(url); }, 2000);
+    }
+  };
+
+  iframe.src = url;
 }
 
 function exportBranchTXT(id) {
