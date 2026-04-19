@@ -1221,16 +1221,49 @@ let emojiPanelOpen = false;
 let activeCatIndex = 0;
 let emojiSearchVal = '';
 
+// Зберігаємо останній фокус та позицію курсору у редагованих полях.
+// ВАЖЛИВО: оновлюємо тільки коли фокус іде НЕ на панель емодзі.
+let emojiLastFocus = null;
+let emojiLastSel   = null; // { start, end } для textarea / input
+
+function isEmojiPanelEl(el) {
+  return el && !!el.closest('#emoji-panel, #btn-emoji');
+}
+
+['editor-plain', 'editor-rich', 'page-title'].forEach(id => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener('focus', () => { emojiLastFocus = el; });
+  el.addEventListener('mouseup', () => {
+    emojiLastFocus = el;
+    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT')
+      emojiLastSel = { start: el.selectionStart, end: el.selectionEnd };
+  });
+  el.addEventListener('keyup', () => {
+    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT')
+      emojiLastSel = { start: el.selectionStart, end: el.selectionEnd };
+  });
+  // Коли фокус іде ГЕТЬ з поля — зберігаємо позицію тільки якщо він іде НЕ в панель
+  el.addEventListener('blur', e => {
+    if (isEmojiPanelEl(e.relatedTarget)) return; // фокус перейшов у панель — не скидаємо
+    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT')
+      emojiLastSel = { start: el.selectionStart, end: el.selectionEnd };
+    // emojiLastFocus залишаємо — щоб вставка все одно йшла в це поле
+  });
+});
+
 function buildEmojiPanel() {
   const catEl = document.getElementById('emoji-categories');
-  const gridEl = document.getElementById('emoji-grid');
   catEl.innerHTML = '';
   EMOJI_CATEGORIES.forEach((cat, i) => {
     const btn = document.createElement('button');
     btn.className = 'emoji-cat-btn' + (i === activeCatIndex ? ' active' : '');
     btn.textContent = cat.label;
     btn.title = cat.name;
-    btn.addEventListener('click', () => {
+    // mousedown + preventDefault — НЕ забираємо фокус з редактора при натисканні вкладки
+    btn.addEventListener('mousedown', e => e.preventDefault());
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
       activeCatIndex = i;
       emojiSearchVal = '';
       document.getElementById('emoji-search').value = '';
@@ -1244,39 +1277,58 @@ function buildEmojiPanel() {
 function renderEmojiGrid(query) {
   const gridEl = document.getElementById('emoji-grid');
   gridEl.innerHTML = '';
-  let emojis;
-  if (query) {
-    emojis = EMOJI_CATEGORIES.flatMap(c => c.emojis);
-    // Simple filter: include all (we don't have names per emoji, just show all on empty search)
-  } else {
-    emojis = EMOJI_CATEGORIES[activeCatIndex].emojis;
-  }
+  const emojis = query
+    ? EMOJI_CATEGORIES.flatMap(c => c.emojis)
+    : EMOJI_CATEGORIES[activeCatIndex].emojis;
   emojis.forEach(em => {
     const cell = document.createElement('span');
     cell.className = 'emoji-cell';
     cell.textContent = em;
     cell.title = em;
-    cell.addEventListener('click', () => insertEmoji(em));
+    // mousedown + preventDefault — НЕ забираємо фокус при кліку на іконку
+    cell.addEventListener('mousedown', e => e.preventDefault());
+    cell.addEventListener('click', e => { e.stopPropagation(); insertEmoji(em); });
     gridEl.appendChild(cell);
   });
 }
 
 function insertEmoji(em) {
-  const plain = document.getElementById('editor-plain');
-  const rich  = document.getElementById('editor-rich');
+  const target = emojiLastFocus;
+
+  // — Назва сторінки або plain textarea —
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+    // Відновлюємо збережену позицію курсору і вставляємо
+    const val   = target.value;
+    const sel   = emojiLastSel || { start: val.length, end: val.length };
+    const start = sel.start ?? val.length;
+    const end   = sel.end   ?? start;
+    target.value = val.slice(0, start) + em + val.slice(end);
+    const newPos = start + em.length;
+    target.selectionStart = target.selectionEnd = newPos;
+    emojiLastSel = { start: newPos, end: newPos };
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+    target.focus();
+    unsaved = true; setSyncStatus('pending');
+    return;
+  }
+
+  // — Rich editor (contenteditable) —
   if (activeFormat === 'rich') {
+    const rich = document.getElementById('editor-rich');
     rich.focus();
     document.execCommand('insertText', false, em);
-  } else {
-    const ta = plain;
-    const start = ta.selectionStart;
-    const end   = ta.selectionEnd;
-    const val   = ta.value;
-    ta.value = val.slice(0, start) + em + val.slice(end);
-    ta.selectionStart = ta.selectionEnd = start + em.length;
-    ta.dispatchEvent(new Event('input'));
-    ta.focus();
+    unsaved = true; setSyncStatus('pending');
+    return;
   }
+
+  // — Fallback: plain editor —
+  const plain = document.getElementById('editor-plain');
+  const start = plain.selectionStart;
+  const end   = plain.selectionEnd;
+  plain.value = plain.value.slice(0, start) + em + plain.value.slice(end);
+  plain.selectionStart = plain.selectionEnd = start + em.length;
+  plain.dispatchEvent(new Event('input', { bubbles: true }));
+  plain.focus();
   unsaved = true; setSyncStatus('pending');
 }
 
@@ -1286,28 +1338,40 @@ function toggleEmojiPanel() {
   panel.classList.toggle('hidden', !emojiPanelOpen);
   document.getElementById('btn-emoji').classList.toggle('active', emojiPanelOpen);
   if (emojiPanelOpen) {
+    // Зберігаємо поточний фокус / позицію перед відкриттям
+    const ae = document.activeElement;
+    if (ae && (ae.id === 'editor-plain' || ae.id === 'editor-rich' || ae.id === 'page-title')) {
+      emojiLastFocus = ae;
+      if (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')
+        emojiLastSel = { start: ae.selectionStart, end: ae.selectionEnd };
+    }
     buildEmojiPanel();
-    document.getElementById('emoji-search').focus();
+    // НЕ фокусуємо поле пошуку автоматично — щоб не скидати emojiLastFocus
   }
 }
 
+document.getElementById('btn-emoji').addEventListener('mousedown', e => e.preventDefault()); // не забираємо фокус з редактора
 document.getElementById('btn-emoji').addEventListener('click', e => {
   e.stopPropagation();
   toggleEmojiPanel();
 });
 
 document.getElementById('emoji-search').addEventListener('input', e => {
+  e.stopPropagation();
   emojiSearchVal = e.target.value.trim().toLowerCase();
   renderEmojiGrid(emojiSearchVal);
 });
 
-// Close panel when clicking outside
+// Клік всередині панелі — не спливає до document (не закриває панель)
+document.getElementById('emoji-panel').addEventListener('click', e => e.stopPropagation());
+
+// Закрити панель при кліку поза нею
 document.addEventListener('click', e => {
-  if (emojiPanelOpen && !document.getElementById('emoji-panel').contains(e.target) && e.target.id !== 'btn-emoji' && !e.target.closest('#btn-emoji')) {
-    emojiPanelOpen = false;
-    document.getElementById('emoji-panel').classList.add('hidden');
-    document.getElementById('btn-emoji').classList.remove('active');
-  }
+  if (!emojiPanelOpen) return;
+  if (isEmojiPanelEl(e.target)) return;
+  emojiPanelOpen = false;
+  document.getElementById('emoji-panel').classList.add('hidden');
+  document.getElementById('btn-emoji').classList.remove('active');
 });
 
 // ════════════════════════════════════════════════════════════
