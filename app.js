@@ -2,7 +2,8 @@
 //  ARKHIV — app.js
 // ════════════════════════════════════════════════════════════
 
-const ROOT_ID = 'root';
+const ROOT_ID  = 'root';
+const TRASH_ID = 'trash';
 const LS_KEY  = 'arkhiv_v3';
 const LS_SW   = 'arkhiv-sidebar-w';
 const LS_SO   = 'arkhiv-sidebar-open';
@@ -231,7 +232,7 @@ async function pullChangesFromDB() {
     // ── Видалити сторінки яких немає в БД ───────────────────
     const dbIds = new Set(allSnap.docs.map(d => d.id));
     Object.keys(state.pages).forEach(id => {
-      if (id === ROOT_ID) return;
+      if (id === ROOT_ID || id === TRASH_ID) return;
       if (!dbIds.has(id)) {
         const page = state.pages[id];
         if (page?.parentId && state.pages[page.parentId]) {
@@ -438,8 +439,11 @@ function uid() { return Date.now().toString(36) + Math.random().toString(36).sli
 function ensureRoot() {
   if (!state.pages[ROOT_ID]) {
     state.pages[ROOT_ID] = { id: ROOT_ID, title: 'Мій архів', content: '', format: 'plain', parentId: null, children: [], createdAt: Date.now(), updatedAt: Date.now() };
-    // Write root to Firestore so other devices see it
     if (fbReady) fbQueueWrite(state.pages[ROOT_ID]);
+  }
+  if (!state.pages[TRASH_ID]) {
+    state.pages[TRASH_ID] = { id: TRASH_ID, title: 'Корзина', content: '', format: 'plain', parentId: null, children: [], createdAt: Date.now(), updatedAt: Date.now() };
+    if (fbReady) fbQueueWrite(state.pages[TRASH_ID]);
   }
   Object.values(state.pages).forEach(p => { if (!Array.isArray(p.children)) p.children = []; });
 }
@@ -493,17 +497,39 @@ function createPage(parentId) {
 }
 
 function deletePage(id) {
-  if (id === ROOT_ID) return;
+  if (id === ROOT_ID || id === TRASH_ID) return;
   const page = state.pages[id]; if (!page) return;
-  [...(page.children || [])].forEach(deletePage);
+  if (page.parentId === TRASH_ID) { hardDeletePage(id); return; }
+  const oldParent = state.pages[page.parentId];
+  if (oldParent) oldParent.children = oldParent.children.filter(c => c !== id);
+  page.parentId = TRASH_ID;
+  const trash = state.pages[TRASH_ID];
+  if (trash && !trash.children.includes(id)) trash.children.push(id);
+  page.updatedAt = Date.now();
+  saveState(); fbQueueWrite(page); flushWriteQueue();
+}
+
+function hardDeletePage(id) {
+  if (id === ROOT_ID || id === TRASH_ID) return;
+  const page = state.pages[id]; if (!page) return;
+  [...(page.children || [])].forEach(hardDeletePage);
   const parent = state.pages[page.parentId];
-  if (parent) {
-    parent.children = parent.children.filter(c => c !== id);
-    // No need to write parent to Firestore — child deletion triggers rebuild on all devices
-  }
+  if (parent) parent.children = parent.children.filter(c => c !== id);
   fbDeletePage(id);
   delete state.pages[id];
   saveState();
+}
+
+function restorePage(id) {
+  const page = state.pages[id]; if (!page) return;
+  const trash = state.pages[TRASH_ID];
+  if (trash) trash.children = trash.children.filter(c => c !== id);
+  page.parentId = ROOT_ID;
+  const root = state.pages[ROOT_ID];
+  if (root && !root.children.includes(id)) root.children.push(id);
+  page.updatedAt = Date.now();
+  expandState[ROOT_ID] = true;
+  saveState(); fbQueueWrite(page); flushWriteQueue();
 }
 
 function duplicatePage(id) {
@@ -558,6 +584,28 @@ function updateBreadcrumb(id) {
 }
 
 // ════════════════════════════════════════════════════════════
+//  DRAG-AND-DROP
+// ════════════════════════════════════════════════════════════
+let dragId = null;
+
+function movePage(id, newParentId) {
+  if (!id || !newParentId) return;
+  if (id === ROOT_ID || id === TRASH_ID) return;
+  if (id === newParentId) return;
+  if (isInSubtree(newParentId, id)) return;
+  const page = state.pages[id]; if (!page) return;
+  const oldParent = state.pages[page.parentId];
+  if (oldParent) oldParent.children = oldParent.children.filter(c => c !== id);
+  page.parentId = newParentId;
+  const newParent = state.pages[newParentId];
+  if (newParent && !newParent.children.includes(id)) newParent.children.push(id);
+  page.updatedAt = Date.now();
+  expandState[newParentId] = true;
+  saveState(); fbQueueWrite(page); flushWriteQueue();
+  renderTree();
+}
+
+// ════════════════════════════════════════════════════════════
 //  RENDER TREE
 // ════════════════════════════════════════════════════════════
 function renderTree() {
@@ -565,24 +613,49 @@ function renderTree() {
   treeEl.innerHTML = '';
   const q = document.getElementById('search-input').value.trim().toLowerCase();
 
-  function buildNode(id, depth) {
+  function attachDragEvents(row, id) {
+    const isSpecial = id === ROOT_ID || id === TRASH_ID;
+    if (!isSpecial) {
+      row.draggable = true;
+      row.addEventListener('dragstart', e => {
+        dragId = id; e.dataTransfer.effectAllowed = 'move';
+        setTimeout(() => row.classList.add('dragging'), 0);
+      });
+      row.addEventListener('dragend', () => {
+        dragId = null; row.classList.remove('dragging');
+        document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+      });
+    }
+    row.addEventListener('dragover', e => { e.preventDefault(); if (dragId && dragId !== id) row.classList.add('drag-over'); });
+    row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+    row.addEventListener('drop', e => {
+      e.preventDefault(); row.classList.remove('drag-over');
+      if (dragId && dragId !== id && !isInSubtree(id, dragId)) movePage(dragId, id);
+      dragId = null;
+    });
+  }
+
+  function buildNode(id, depth, inTrash) {
     const page = state.pages[id]; if (!page) return null;
     const children = page.children || [];
     const hasKids = children.length > 0;
     const matchTitle = page.title.toLowerCase().includes(q);
-    const childNodes = children.map(c => buildNode(c, depth + 1)).filter(Boolean);
+    const childNodes = children.map(c => buildNode(c, depth + 1, inTrash)).filter(Boolean);
     if (q && !matchTitle && !childNodes.length) return null;
 
     const item = document.createElement('div');
     item.className = 'tree-item';
 
     const row = document.createElement('div');
-    row.className = 'tree-row' + (state.activeId === id ? ' active' : '');
+    const isTrashRoot = id === TRASH_ID;
+    row.className = 'tree-row'
+      + (state.activeId === id ? ' active' : '')
+      + (isTrashRoot ? ' trash-root' : '')
+      + (inTrash && !isTrashRoot ? ' in-trash' : '');
     row.dataset.id = id;
     row.style.paddingLeft = (4 + depth * 13) + 'px';
     row.title = page.title;
 
-    // Toggle
     const toggle = document.createElement('span');
     toggle.className = 'tree-toggle';
     if (hasKids) {
@@ -596,20 +669,48 @@ function renderTree() {
       toggle.innerHTML = '<i class="tree-dot"></i>';
     }
 
-    // Icon → page actions popup
     const icon = document.createElement('span');
     icon.className = 'tree-icon';
-    icon.title = 'Зберегти / Експортувати гілку';
-    icon.textContent = id === ROOT_ID ? '⌂' : '◻';
-    icon.addEventListener('click', e => { e.stopPropagation(); showPageActions(id, icon); });
+    if (isTrashRoot) {
+      icon.textContent = '🗑';
+      icon.title = 'Корзина';
+    } else if (id === ROOT_ID) {
+      icon.textContent = '⌂';
+      icon.title = 'Зберегти / Експортувати гілку';
+      icon.addEventListener('click', e => { e.stopPropagation(); showPageActions(id, icon); });
+    } else if (inTrash) {
+      icon.textContent = '↩';
+      icon.title = 'Відновити';
+      icon.addEventListener('click', e => { e.stopPropagation(); restorePage(id); renderTree(); });
+    } else {
+      icon.textContent = '◻';
+      icon.title = 'Зберегти / Експортувати гілку';
+      icon.addEventListener('click', e => { e.stopPropagation(); showPageActions(id, icon); });
+    }
 
-    // Label
     const label = document.createElement('span');
     label.className = 'tree-label';
     label.textContent = page.title;
 
     row.append(toggle, icon, label);
+
+    if (isTrashRoot && children.length > 0) {
+      const emptyBtn = document.createElement('span');
+      emptyBtn.className = 'trash-empty-btn';
+      emptyBtn.title = 'Очистити корзину';
+      emptyBtn.textContent = '✕';
+      emptyBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        showModal('Остаточно видалити всі сторінки в корзині?', () => {
+          [...(state.pages[TRASH_ID]?.children || [])].forEach(hardDeletePage);
+          renderTree();
+        });
+      });
+      row.appendChild(emptyBtn);
+    }
+
     item.appendChild(row);
+    attachDragEvents(row, id);
 
     if (hasKids && (expandState[id] !== false || q)) {
       const wrap = document.createElement('div');
@@ -618,13 +719,25 @@ function renderTree() {
       item.appendChild(wrap);
     }
 
-    row.addEventListener('click', e => { if (e.target === toggle || e.target === icon) return; openPage(id); });
+    if (!isTrashRoot) {
+      row.addEventListener('click', e => {
+        if (e.target === toggle || e.target === icon || e.target.classList.contains('trash-empty-btn')) return;
+        openPage(id);
+      });
+    }
     row.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e.clientX, e.clientY, id); });
     return item;
   }
 
-  const root = buildNode(ROOT_ID, 0);
+  const root = buildNode(ROOT_ID, 0, false);
   if (root) treeEl.appendChild(root);
+
+  const sep = document.createElement('div');
+  sep.className = 'tree-separator';
+  treeEl.appendChild(sep);
+
+  const trash = buildNode(TRASH_ID, 0, true);
+  if (trash) treeEl.appendChild(trash);
 }
 
 // ════════════════════════════════════════════════════════════
@@ -688,18 +801,17 @@ function pageToHtml(page) {
 function exportBranchPDF(id) {
   const pages = collectSubtree(id);
   const styles = `
-    @import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;1,400&family=Playfair+Display:wght@400;500&display=swap');
-    @page { margin: 18mm 20mm; }
+    @page { margin: 18mm 20mm; size: A4; }
     * { box-sizing: border-box; }
-    body { font-family: 'Lora', Georgia, serif; color: #1a1a2e; font-size: 11pt; line-height: 1.8; background: #fff; margin: 0; padding: 0; }
-    h1 { font-family: 'Playfair Display', serif; font-size: 16pt; font-weight: 500; color: #1a1a2e; margin: 16pt 0 4pt; border-bottom: 1pt solid #4A90D9; padding-bottom: 4pt; page-break-after: avoid; }
-    h2 { font-family: 'Playfair Display', serif; font-size: 13pt; color: #2563a8; margin: 12pt 0 3pt; page-break-after: avoid; }
+    body { font-family: Georgia, 'Times New Roman', serif; color: #1a1a2e; font-size: 11pt; line-height: 1.8; background: #fff; margin: 0; padding: 0; }
+    h1 { font-size: 16pt; font-weight: 500; color: #1a1a2e; margin: 16pt 0 4pt; border-bottom: 1pt solid #4A90D9; padding-bottom: 4pt; page-break-after: avoid; }
+    h2 { font-size: 13pt; color: #2563a8; margin: 12pt 0 3pt; page-break-after: avoid; }
     h3 { font-size: 11pt; color: #4a5568; margin: 9pt 0 2pt; page-break-after: avoid; }
     p { margin: 4pt 0; orphans: 3; widows: 3; }
     ul, ol { padding-left: 16pt; margin: 4pt 0; }
     li { margin: 2pt 0; }
     pre { background: #f5f7fa; border: 0.5pt solid #e2e8f0; padding: 7pt 10pt; white-space: pre-wrap; font-size: 9pt; font-family: 'Courier New', monospace; border-radius: 3pt; page-break-inside: avoid; }
-    code { background: #f0f2f5; padding: 1pt 3pt; font-family: 'Courier New', monospace; font-size: 9pt; color: #c7254e; border-radius: 2pt; }
+    code { background: #f0f2f5; padding: 1pt 3pt; font-family: 'Courier New', monospace; font-size: 9pt; color: #c7254e; }
     pre code { background: none; color: inherit; padding: 0; }
     blockquote { border-left: 2.5pt solid #4A90D9; margin: 6pt 0; padding: 2pt 0 2pt 10pt; color: #4a5568; font-style: italic; }
     table { width: 100%; border-collapse: collapse; margin: 7pt 0; page-break-inside: avoid; }
@@ -707,10 +819,8 @@ function exportBranchPDF(id) {
     td { border: 0.5pt solid #e2e8f0; padding: 4pt 7pt; }
     hr.page-sep { border: none; border-top: 1pt solid #e2e8f0; margin: 14pt 0; }
     .crumb { font-size: 8pt; color: #94a3b8; margin-bottom: 2pt; font-family: 'Courier New', monospace; }
-    a { color: #2563a8; text-decoration: underline; }
-    @media print {
-      body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-    }
+    a { color: #2563a8; }
+    @media print { body { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }
   `;
   let body = '';
   pages.forEach((page, i) => {
@@ -719,18 +829,23 @@ function exportBranchPDF(id) {
       + `<h1>${page.title}</h1>`
       + pageToHtml(page);
   });
-  const w = window.open('', '_blank');
-  if (!w) { alert('Дозвольте спливаючі вікна для експорту PDF'); return; }
+  const html = `<!DOCTYPE html><html lang="uk"><head><meta charset="UTF-8"><title>${(state.pages[id]?.title || 'export')}</title><style>${styles}</style></head><body>${body}</body></html>`;
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
   const filename = (state.pages[id]?.title || 'export').replace(/[<>:"/\\|?*]/g, '_');
-  w.document.write(`<!DOCTYPE html><html lang="uk"><head>
-    <meta charset="UTF-8">
-    <title>${filename}</title>
-    <style>${styles}</style>
-  </head><body>${body}</body></html>`);
-  w.document.close();
-  w.addEventListener('load', () => {
-    setTimeout(() => { w.focus(); w.print(); }, 400);
-  });
+
+  // Open in new tab with print-on-load — browser's native Save as PDF keeps real text
+  const w = window.open(url, '_blank');
+  if (w) {
+    w.addEventListener('load', () => {
+      setTimeout(() => { w.focus(); w.print(); URL.revokeObjectURL(url); }, 300);
+    });
+  } else {
+    // Popup blocked — fallback: direct download as .html (user can print from there)
+    const a = document.createElement('a');
+    a.href = url; a.download = filename + '.html'; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
 }
 
 function exportBranchTXT(id) {
@@ -864,10 +979,23 @@ let ctxTargetId = null;
 
 function showCtxMenu(x, y, id) {
   ctxTargetId = id;
-  const isRoot = id === ROOT_ID;
-  ctxMenu.querySelector('[data-action="delete"]').style.display    = isRoot ? 'none' : '';
-  ctxMenu.querySelector('[data-action="duplicate"]').style.display = isRoot ? 'none' : '';
-  ctxMenu.querySelectorAll('hr').forEach(hr => hr.style.display = isRoot ? 'none' : '');
+  const isSpecial = id === ROOT_ID || id === TRASH_ID;
+  const inTrash = !isSpecial && state.pages[id]?.parentId === TRASH_ID;
+  ctxMenu.querySelector('[data-action="rename"]').style.display    = isSpecial ? 'none' : '';
+  ctxMenu.querySelector('[data-action="add-child"]').style.display = (isSpecial && id === TRASH_ID) || inTrash ? 'none' : '';
+  ctxMenu.querySelector('[data-action="duplicate"]').style.display = (isSpecial || inTrash) ? 'none' : '';
+  ctxMenu.querySelector('[data-action="delete"]').style.display    = isSpecial ? 'none' : '';
+  ctxMenu.querySelectorAll('hr').forEach(hr => hr.style.display = isSpecial ? 'none' : '');
+  let restoreBtn = ctxMenu.querySelector('[data-action="restore"]');
+  if (!restoreBtn) {
+    restoreBtn = document.createElement('button');
+    restoreBtn.dataset.action = 'restore';
+    restoreBtn.textContent = 'Відновити';
+    ctxMenu.insertBefore(restoreBtn, ctxMenu.querySelector('[data-action="delete"]'));
+  }
+  restoreBtn.style.display = inTrash ? '' : 'none';
+  const deleteBtn = ctxMenu.querySelector('[data-action="delete"]');
+  if (deleteBtn) deleteBtn.textContent = inTrash ? 'Видалити назавжди' : 'Видалити';
   ctxMenu.classList.remove('hidden');
   ctxMenu.style.left = Math.min(x, window.innerWidth - 200) + 'px';
   ctxMenu.style.top  = Math.min(y, window.innerHeight - 180) + 'px';
@@ -878,24 +1006,35 @@ ctxMenu.addEventListener('click', e => {
   const btn = e.target.closest('button'); if (!btn) return;
   const action = btn.dataset.action, id = ctxTargetId;
   ctxMenu.classList.add('hidden');
-  if (action === 'rename') {
+  const inTrash = state.pages[id]?.parentId === TRASH_ID;
+  if (action === 'restore') {
+    restorePage(id); renderTree();
+  } else if (action === 'rename') {
     startInlineRename(id);
   } else if (action === 'add-child') {
     const child = createPage(id);
-    expandState[id] = true;   // expand parent
-    renderTree();
-    openPage(child.id);
+    expandState[id] = true;
+    renderTree(); openPage(child.id);
     setTimeout(() => startInlineRename(child.id), 120);
   } else if (action === 'duplicate') {
     const np = duplicatePage(id);
     if (np) { expandState[np.parentId] = true; renderTree(); openPage(np.id); }
   } else if (action === 'delete') {
-    showModal(`Видалити "${state.pages[id]?.title}" та всі підсторінки?`, () => {
-      const wasActive = isInSubtree(state.activeId, id);
-      deletePage(id);
-      if (wasActive) { state.activeId = null; document.getElementById('editor-wrap').classList.add('hidden'); document.getElementById('empty-state').classList.remove('hidden'); }
-      renderTree();
-    });
+    if (inTrash) {
+      showModal(`Остаточно видалити «${state.pages[id]?.title}» та всі підсторінки?`, () => {
+        const wasActive = isInSubtree(state.activeId, id);
+        hardDeletePage(id);
+        if (wasActive) { state.activeId = null; document.getElementById('editor-wrap').classList.add('hidden'); document.getElementById('empty-state').classList.remove('hidden'); }
+        renderTree();
+      });
+    } else {
+      showModal(`Перемістити «${state.pages[id]?.title}» до корзини?`, () => {
+        const wasActive = isInSubtree(state.activeId, id);
+        deletePage(id);
+        if (wasActive) { state.activeId = null; document.getElementById('editor-wrap').classList.add('hidden'); document.getElementById('empty-state').classList.remove('hidden'); }
+        renderTree();
+      });
+    }
   }
 });
 
@@ -1023,13 +1162,23 @@ document.getElementById('btn-save').addEventListener('click', () => {
 });
 
 document.getElementById('btn-delete-page').addEventListener('click', () => {
-  const id = state.activeId; if (!id || id === ROOT_ID) return;
-  showModal(`Видалити "${state.pages[id]?.title}"?`, () => {
-    deletePage(id); state.activeId = null;
-    document.getElementById('editor-wrap').classList.add('hidden');
-    document.getElementById('empty-state').classList.remove('hidden');
-    renderTree();
-  });
+  const id = state.activeId; if (!id || id === ROOT_ID || id === TRASH_ID) return;
+  const inTrash = state.pages[id]?.parentId === TRASH_ID;
+  if (inTrash) {
+    showModal(`Остаточно видалити «${state.pages[id]?.title}»?`, () => {
+      hardDeletePage(id); state.activeId = null;
+      document.getElementById('editor-wrap').classList.add('hidden');
+      document.getElementById('empty-state').classList.remove('hidden');
+      renderTree();
+    });
+  } else {
+    showModal(`Перемістити «${state.pages[id]?.title}» до корзини?`, () => {
+      deletePage(id); state.activeId = null;
+      document.getElementById('editor-wrap').classList.add('hidden');
+      document.getElementById('empty-state').classList.remove('hidden');
+      renderTree();
+    });
+  }
 });
 
 document.getElementById('btn-preview').addEventListener('click', togglePreview);
@@ -1064,17 +1213,16 @@ document.getElementById('search-input').addEventListener('input', renderTree);
 //  EMOJI / ICON PICKER
 // ════════════════════════════════════════════════════════════
 const EMOJI_CATEGORIES = [
-  { label: '😊 Емоції', emojis: ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','😗','☺️','😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄','😬','🤥','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤧','🥵','🥶','🥴','😵','🤯','🤠','🥳','🥸','😎','🤓','🧐','😕','😟','🙁','☹️','😮','😯','😲','😳','🥺','😦','😧','😨','😰','😥','😢','😭','😱','😖','😣','😞','😓','😩','😫','🥱','😤','😡','😠','🤬','😈','👿'] },
-  { label: '👍 Жести', emojis: ['👋','🤚','🖐️','✋','🖖','👌','🤌','🤏','✌️','🤞','🤟','🤘','🤙','👈','👉','👆','🖕','👇','☝️','👍','👎','✊','👊','🤛','🤜','👏','🙌','👐','🤲','🤝','🙏','✍️','💅','🤳','💪','🦵','🦶','👂','🦻','👃','🧠','🦷','🦴','👀','👁️','👅','👄','💋','🩸'] },
-  { label: '❤️ Символи', emojis: ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','💟','☮️','✝️','☪️','🕉️','✡️','🔯','🕎','☯️','☦️','🛐','⛎','♈','♉','♊','♋','♌','♍','♎','♏','♐','♑','♒','♓','🆔','⚛️','🉑','☢️','☣️','📴','📳','🈶','🈚','🈸','🈺','🈷️','✴️','🆚','💮','🉐','㊙️','㊗️','🈴','🈵','🈹','🈲','🅰️','🅱️','🆎','🆑','🅾️','🆘','❌','⭕','🛑','⛔','📛','🚫','💯','💢','♨️','🚷','🚯','🚳','🚱','🔞','📵','🚭','❗','❕','❓','❔','‼️','⁉️','🔅','🔆','〽️','⚠️','🔱','♻️','✅','🈯','💹','❎','🌐','💠','Ⓜ️','🌀','💤','🏧','🚾','♿','🅿️','🛗','🈳','🈹','🚺','🚹','🚼','⚧️','🚻','🚮','🎦','📶','🈁','🔣','ℹ️','🔤','🔡','🔠','🆖','🆗','🆙','🆒','🆕','🆓','0️⃣','1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟','🔢','▶️','⏸️','⏯️','⏹️','⏺️','⏭️','⏮️','⏩','⏪','⏫','⏬','◀️','🔼','🔽','➡️','⬅️','⬆️','⬇️','↗️','↘️','↙️','↖️','↕️','↔️','↪️','↩️','⤴️','⤵️','🔀','🔁','🔂','🔃','🎵','🎶','➕','➖','➗','✖️','♾️','💲','💱','‼️','⁉️','🔴','🟠','🟡','🟢','🔵','🟣','⚫','⚪','🟤','🔺','🔻','🔷','🔶','🔹','🔸','🔳','🔲','▪️','▫️','◾','◽','◼️','◻️','🟥','🟧','🟨','🟩','🟦','🟪','⬛','⬜','🟫','🔈','🔇','🔉','🔊','📢','📣','📯','🔔','🔕'] },
-  { label: '🌟 Природа', emojis: ['🌸','🌺','🌻','🌹','🥀','🌷','🌼','💐','🍀','🌿','🍃','🍂','🍁','🍄','🌾','☘️','🌱','🌲','🌳','🌴','🌵','🎋','🎍','🪴','🌍','🌎','🌏','🌐','🌑','🌒','🌓','🌔','🌕','🌖','🌗','🌘','🌙','🌚','🌛','🌜','🌝','🌞','⭐','🌟','💫','✨','⚡','🔥','💥','❄️','🌊','🌀','🌈','☁️','⛅','🌤️','🌥️','🌦️','🌧️','⛈️','🌩️','🌨️','🌪️','🌫️','🌬️','🌂','☂️','☔','⛱️','⚡','❄️','🌊','💧','💦','☃️','⛄','🌬️','🍎','🍊','🍋','🍇','🍓','🍒','🍑','🥭','🍍','🥥','🥝','🍅','🍆','🥑','🥦','🥕','🌽','🧅','🧄','🥔','🍠','🥐','🥖','🫓','🥨','🧀','🥚','🍳','🧈','🥞','🧇','🥓','🥩','🍗','🍖','🦴','🌭','🍔','🍟','🍕','🫔','🌮','🌯','🫙','🧆','🥚','🍱','🍘','🍣','🍤','🍙','🍚','🍛','🍜','🍝','🍞','🥗','🥘','🫕','🍲','🫗','🥣','🥫','🧂','🍿','🧃','🥤','🧋','☕','🍵','🫖','🧉','🍺','🍻','🥂','🍷','🥃','🍸','🍹','🍾','🫗','🍶','🧊'] },
-  { label: '🏠 Речі', emojis: ['⌚','📱','💻','🖥️','🖨️','⌨️','🖱️','🖲️','💽','💾','💿','📀','📷','📸','📹','🎥','📽️','🎞️','📞','☎️','📟','📠','📺','📻','🧭','⏱️','⏲️','⏰','🕰️','⌛','⏳','📡','🔋','🔌','💡','🔦','🕯️','🪔','🧯','🛢️','💰','💴','💵','💶','💷','💸','💳','🪙','💎','⚖️','🪜','🧲','🔧','🪛','🔩','⚙️','🗜️','🪤','⛏️','⚒️','🛠️','🗡️','⚔️','🛡️','🔫','🪃','🏹','🪚','🔨','🪓','🗝️','🔑','🚪','🪞','🪟','🛋️','🪑','🚽','🪠','🚿','🛁','🪤','🧴','🧷','🧹','🧺','🧻','🪣','🧼','🫧','🪥','🧽','🧯','🛒','🚬','⚰️','🪦','⚱️','🧿','💈','⚗️','🔭','🔬','🩺','🩻','🩹','💊','💉','🩸','🧬','🦠','🧫','🧪','🌡️','🫀','🫁','🧠','🦷','🦴','👁️','📦','📫','📪','📬','📭','📮','🗳️','✏️','✒️','🖊️','🖋️','📝','📁','📂','🗂️','📅','📆','🗒️','🗓️','📇','📈','📉','📊','📋','📌','📍','🗺️','🗃️','🗄️','🗑️','📏','📐','✂️','🗃️','📎','🖇️','📌','🔏','🔒','🔓','🔐'] },
-  { label: '🎉 Активності', emojis: ['⚽','🏀','🏈','⚾','🥎','🏐','🏉','🎾','🥏','🎱','🪀','🏓','🏸','🏒','🏑','🥍','🏏','🪃','🥅','⛳','🪁','🎣','🤿','🎽','🎿','🛷','🥌','🎯','🪀','🪆','🎮','🕹️','🎲','♟️','🎭','🎨','🖼️','🎪','🤹','🎠','🎡','🎢','🎪','🎤','🎧','🎼','🎹','🥁','🪘','🎷','🎺','🎸','🪕','🎻','🪗','🎬','🎤','🎭','🎨','🖌️','🖍️','📚','📖','📰','🗞️','📓','📔','📒','📕','📗','📘','📙','📃','📄','📑','🗒️','📊','📈','📉','🗃️','🗂️','🗄️','📥','📤','📦','📫','📪','📬','📭','📮','📯','📢','📣','📡','🔔','🔕','🎵','🎶','💿','📀','🎞️','📽️','🎥','📺','📻','🎙️','🎚️','🎛️','⏏️'] },
-  { label: '🚀 Транспорт', emojis: ['🚗','🚕','🚙','🚌','🚎','🏎️','🚓','🚑','🚒','🚐','🛻','🚚','🚛','🚜','🏍️','🛵','🛺','🚲','🛴','🛹','🛼','🚏','🛣️','🛤️','⛽','🚨','🚥','🚦','🛑','⚓','🚢','✈️','🛫','🛬','🛩️','💺','🚁','🛸','🚀','🛰️','🛶','⛵','🚤','🛥️','🛳️','⛴️','🚂','🚃','🚄','🚅','🚆','🚇','🚈','🚉','🚊','🚝','🚞','🚋','🚍','🚎','🚐','🚑','🚒','🚓','🚔','🚖','🚗','🚘','🚙','🛻','🚚','🚛','🚜','🏎️','🏍️','🛵','🛺','🚲','🛴','🛹','🛼'] },
-  { label: '🏢 Місця', emojis: ['🏠','🏡','🏢','🏣','🏤','🏥','🏦','🏧','🏨','🏩','🏪','🏫','🏬','🏭','🏯','🏰','💒','🗼','🗽','⛪','🕌','🛕','🕍','⛩️','🕋','⛲','⛺','🏕️','🌁','🌃','🌄','🌅','🌆','🌇','🌉','🌌','🌠','🎇','🎆','🎑','🏞️','🌋','🗻','🏔️','⛰️','🏝️','🏜️','🏖️','🏗️','🏘️','🏚️','🛖','🗺️'] },
+  { label: '😊 Емоції', emojis: ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','☺️','😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄','😬','🤥','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤧','🥵','🥶','🥴','😵','🤯','🤠','🥳','🥸','😎','🤓','🧐','😕','😟','🙁','☹️','😮','😯','😲','😳','🥺','😦','😧','😨','😰','😥','😢','😭','😱','😖','😣','😞','😓','😩','😫','🥱','😤','😡','😠','🤬','😈','👿','💀','☠️','💩','🤡','👹','👺','👻','👽','👾','🤖'] },
+  { label: '👍 Жести', emojis: ['👋','🤚','🖐️','✋','🖖','👌','🤌','🤏','✌️','🤞','🤟','🤘','🤙','👈','👉','👆','👇','☝️','👍','👎','✊','👊','🤛','🤜','👏','🙌','👐','🤲','🤝','🙏','✍️','💅','🤳','💪','🦵','🦶','👂','👃','🧠','🦷','🦴','👀','👁️','👅','👄','💋'] },
+  { label: '❤️ Символи', emojis: ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','💟','☮️','✝️','☪️','🕉️','✡️','🔯','🕎','☯️','⛎','♈','♉','♊','♋','♌','♍','♎','♏','♐','♑','♒','♓','🆔','☢️','☣️','📴','📳','🈶','🈚','🈸','🈺','🈷️','✴️','🆚','💮','🉐','㊙️','㊗️','🈴','🈵','🈹','🈲','🅰️','🅱️','🆎','🆑','🅾️','🆘','❌','⭕','🛑','⛔','📛','🚫','💯','♻️','✅','❗','❕','❓','❔','‼️','⁉️','🔴','🟠','🟡','🟢','🔵','🟣','⚫','⚪','🟤','🔺','🔻','🔷','🔶','🔹','🔸','🟥','🟧','🟨','🟩','🟦','🟪','⬛','⬜','🟫','⭐','🌟','💫','✨','🔥','💥','❄️','🌈','☁️','⚡','💧','☀️','🌊','🌀','🎵','🎶','💲','💱','🔔','🔕','📢','📣'] },
+  { label: '🌿 Природа', emojis: ['🌸','🌺','🌻','🌹','🥀','🌷','🌼','💐','🍀','🌿','🍃','🍂','🍁','🍄','🌾','☘️','🌱','🌲','🌳','🌴','🌵','🎋','🎍','🪴','🌍','🌎','🌏','🌑','🌒','🌓','🌔','🌕','🌙','🌚','🌛','🌜','🌝','🌞','⭐','🌟','💫','✨','⚡','🔥','💥','❄️','🌊','🌀','🌈','☁️','⛅','🌤️','🌦️','🌧️','⛈️','🌩️','🌨️','🌪️','🌫️','🌬️','☔','⛱️','☃️','⛄','💧','💦','🌋','🗻','🏔️','⛰️','🏝️','🏜️','🏖️'] },
+  { label: '🍎 Їжа', emojis: ['🍎','🍊','🍋','🍇','🍓','🍒','🍑','🥭','🍍','🥥','🥝','🍅','🍆','🥑','🥦','🥕','🌽','🧅','🧄','🥔','🍠','🥐','🥖','🫓','🥨','🧀','🥚','🍳','🧈','🥞','🧇','🥓','🥩','🍗','🍖','🌭','🍔','🍟','🍕','🌮','🌯','🍱','🍣','🍤','🍙','🍚','🍛','🍜','🍝','🍞','🥗','🥘','🍲','🥣','🍿','🧃','🥤','🧋','☕','🍵','🫖','🍺','🍻','🥂','🍷','🥃','🍸','🍹','🍾','🍶'] },
+  { label: '🎉 Активності', emojis: ['⚽','🏀','🏈','⚾','🥎','🏐','🏉','🎾','🥏','🎱','🪀','🏓','🏸','🏒','🏑','🥍','🏏','🥅','⛳','🎣','🤿','🎽','🎿','🛷','🥌','🎯','🎮','🕹️','🎲','♟️','🎭','🎨','🖼️','🎪','🤹','🎠','🎡','🎢','🎤','🎧','🎼','🎹','🥁','🪘','🎷','🎺','🎸','🪕','🎻','🪗','🎬','🖌️','🖍️','📚','📖','📰','📓','📔','📒','📕','📗','📘','📙','📊','📈','📉','🏆','🥇','🥈','🥉','🎖️','🏅','🎗️','🎀','🎁','🎊','🎉','🎈','🎋','🎍','🎑','🎆','🎇','✨','🎃','🎄','🎐'] },
+  { label: '🚀 Транспорт', emojis: ['🚗','🚕','🚙','🚌','🚎','🏎️','🚓','🚑','🚒','🚐','🛻','🚚','🚛','🚜','🏍️','🛵','🛺','🚲','🛴','🛹','🛼','⚓','🚢','✈️','🛫','🛬','🛩️','💺','🚁','🛸','🚀','🛰️','🛶','⛵','🚤','🛥️','🛳️','⛴️','🚂','🚃','🚄','🚅','🚆','🚇','🚈','🚉','🚊','🚝','🚞','🚋','🛑','🚦','🚥','🛣️','🛤️'] },
+  { label: '🏠 Місця та речі', emojis: ['🏠','🏡','🏢','🏣','🏤','🏥','🏦','🏨','🏩','🏪','🏫','🏬','🏭','🏯','🏰','💒','🗼','🗽','⛪','🕌','🛕','🕍','⛩️','🕋','⛲','⛺','🏕️','🗺️','⌚','📱','💻','🖥️','⌨️','🖱️','💾','💿','📀','📷','📸','📹','🎥','📞','☎️','📟','📠','📺','📻','🧭','⏱️','⏰','🕰️','⌛','⏳','📡','🔋','🔌','💡','🔦','🕯️','💰','💴','💵','💶','💷','💸','💳','💎','⚖️','🧲','🔧','🔩','⚙️','⛏️','⚒️','🛠️','🔑','🗝️','🚪','🛋️','📦','📫','📪','📬','📭','📮','✏️','✒️','🖊️','🖋️','📝','📁','📂','🗂️','📅','📆','🗒️','📇','📋','📌','📍','📎','🖇️','🔏','🔒','🔓','🔐','🔬','🔭','💊','💉','🩹','🩺','🧬','🌡️'] },
 ];
 
-// Store last cursor position in active editable element
 let lastCaretTarget = null;
 let lastCaretOffset = null;
 let lastCaretNode   = null;
@@ -1114,12 +1262,10 @@ function insertEmoji(emoji) {
       sel.addRange(range);
       document.execCommand('insertText', false, emoji);
     } catch {
-      // fallback: insert at end of rich editor
       const rich = document.getElementById('editor-rich');
       if (rich) { rich.focus(); document.execCommand('insertText', false, emoji); }
     }
   } else {
-    // No saved caret — try inserting in whichever editor is visible
     const plain = document.getElementById('editor-plain');
     const rich  = document.getElementById('editor-rich');
     if (plain && !plain.classList.contains('hidden')) {
@@ -1129,10 +1275,8 @@ function insertEmoji(emoji) {
       plain.selectionStart = plain.selectionEnd = p + emoji.length;
       plain.dispatchEvent(new Event('input', { bubbles: true }));
     } else if (rich && !rich.classList.contains('hidden')) {
-      rich.focus();
-      document.execCommand('insertText', false, emoji);
+      rich.focus(); document.execCommand('insertText', false, emoji);
     } else {
-      // Insert in title field
       const title = document.getElementById('page-title');
       if (title) {
         const p = title.selectionStart ?? title.value.length;
@@ -1150,39 +1294,33 @@ function closeEmojiPicker() {
 
 function openEmojiPicker(anchorBtn) {
   closeEmojiPicker();
-
   const popup = document.createElement('div');
   popup.id = 'emoji-picker-popup';
   popup.className = 'emoji-picker-popup';
 
-  // Search
   const searchWrap = document.createElement('div');
   searchWrap.className = 'emoji-search-wrap';
   const searchInput = document.createElement('input');
-  searchInput.type = 'text';
-  searchInput.placeholder = 'Пошук...';
-  searchInput.className = 'emoji-search';
+  searchInput.type = 'text'; searchInput.placeholder = 'Пошук...'; searchInput.className = 'emoji-search';
   searchWrap.appendChild(searchInput);
   popup.appendChild(searchWrap);
 
-  // Category tabs
   const tabs = document.createElement('div');
   tabs.className = 'emoji-tabs';
+  let activeTabIdx = 0;
   EMOJI_CATEGORIES.forEach((cat, i) => {
     const tab = document.createElement('button');
     tab.className = 'emoji-tab' + (i === 0 ? ' active' : '');
-    tab.title = cat.label;
-    tab.textContent = cat.emojis[0];
+    tab.title = cat.label; tab.textContent = cat.emojis[0];
     tab.addEventListener('click', () => {
       tabs.querySelectorAll('.emoji-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
+      tab.classList.add('active'); activeTabIdx = i;
       renderGrid(cat.emojis);
     });
     tabs.appendChild(tab);
   });
   popup.appendChild(tabs);
 
-  // Grid
   const grid = document.createElement('div');
   grid.className = 'emoji-grid';
   popup.appendChild(grid);
@@ -1191,61 +1329,42 @@ function openEmojiPicker(anchorBtn) {
     grid.innerHTML = '';
     emojis.forEach(e => {
       const btn = document.createElement('button');
-      btn.className = 'emoji-btn';
-      btn.textContent = e;
-      btn.title = e;
+      btn.className = 'emoji-btn'; btn.textContent = e; btn.title = e;
       btn.addEventListener('mousedown', ev => { ev.preventDefault(); insertEmoji(e); });
       grid.appendChild(btn);
     });
   }
 
   renderGrid(EMOJI_CATEGORIES[0].emojis);
-
   searchInput.addEventListener('input', () => {
-    const q = searchInput.value.trim().toLowerCase();
-    if (!q) { renderGrid(EMOJI_CATEGORIES[0].emojis); return; }
-    const all = EMOJI_CATEGORIES.flatMap(c => c.emojis);
-    renderGrid(all.filter(e => e.includes(q)));
+    const q = searchInput.value.trim();
+    if (!q) { renderGrid(EMOJI_CATEGORIES[activeTabIdx].emojis); return; }
+    renderGrid(EMOJI_CATEGORIES.flatMap(c => c.emojis).filter(e => e.includes(q)));
   });
 
   document.body.appendChild(popup);
 
-  // Position below anchor
   const rect = anchorBtn.getBoundingClientRect();
   const pw = 320, ph = 340;
-  let left = rect.left;
-  let top  = rect.bottom + 6;
+  let left = rect.left, top = rect.bottom + 6;
   if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
   if (top + ph > window.innerHeight - 8) top = rect.top - ph - 6;
-  popup.style.left = left + 'px';
-  popup.style.top  = top  + 'px';
-
+  popup.style.left = left + 'px'; popup.style.top = top + 'px';
   searchInput.focus();
 
-  // Close on outside click
   setTimeout(() => {
-    document.addEventListener('mousedown', function outsideClose(ev) {
-      if (!popup.contains(ev.target) && ev.target !== anchorBtn) {
-        closeEmojiPicker();
-        document.removeEventListener('mousedown', outsideClose);
-      }
+    document.addEventListener('mousedown', function h(ev) {
+      if (!popup.contains(ev.target) && ev.target !== anchorBtn) { closeEmojiPicker(); document.removeEventListener('mousedown', h); }
     });
   }, 0);
 }
 
-// Track caret on all relevant elements
-['editor-plain', 'editor-rich', 'page-title'].forEach(id => {
-  const el = document.getElementById(id);
-  if (el) {
-    el.addEventListener('mouseup', rememberCaret);
-    el.addEventListener('keyup',   rememberCaret);
-    el.addEventListener('focus',   rememberCaret);
-  }
+['editor-plain', 'editor-rich', 'page-title'].forEach(elId => {
+  const el = document.getElementById(elId);
+  if (el) { el.addEventListener('mouseup', rememberCaret); el.addEventListener('keyup', rememberCaret); el.addEventListener('focus', rememberCaret); }
 });
 
-document.getElementById('btn-emoji').addEventListener('click', () => {
-  openEmojiPicker(document.getElementById('btn-emoji'));
-});
+document.getElementById('btn-emoji').addEventListener('click', () => openEmojiPicker(document.getElementById('btn-emoji')));
 
 // ════════════════════════════════════════════════════════════
 //  KEYBOARD
