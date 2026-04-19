@@ -214,6 +214,31 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 }
 .tree-children { padding-left: 12px; }
 
+/* ── Trash section ── */
+.tree-separator {
+  height: 1px; background: var(--border); margin: 6px 8px;
+}
+.tree-row.trash-root { opacity: .85; }
+.tree-row.trash-root .tree-label { color: var(--text3); font-style: italic; }
+.tree-row.in-trash .tree-label { color: var(--text3); text-decoration: line-through; opacity: .8; }
+.trash-empty-btn {
+  margin-left: auto; font-size: 10px; color: var(--danger);
+  padding: 1px 5px; border-radius: 3px; cursor: pointer;
+  opacity: 0; transition: opacity .15s;
+}
+.tree-row.trash-root:hover .trash-empty-btn { opacity: 1; }
+
+/* ── Drag-and-drop ── */
+.tree-row[draggable="true"] { cursor: grab; }
+.tree-row[draggable="true"]:active { cursor: grabbing; }
+.tree-row.dragging { opacity: .4; }
+.tree-row.drag-over {
+  background: var(--accent-l);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
 /* ══ EDITOR AREA ══ */
 #editor-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
 
@@ -539,58 +564,3 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 }
 
 .auth-hint { font-size: 11px; color: var(--text3); text-align: center; margin-top: -4px; }
-
-/* ══ TRASH SECTION ══ */
-#trash-divider {
-  display: flex; align-items: center; gap: 6px;
-  padding: 6px 10px 4px;
-  margin-top: 4px;
-  border-top: 1px solid var(--border);
-  color: var(--text3); font-size: 11px; font-family: var(--font-mono);
-  cursor: pointer; user-select: none;
-  transition: color .15s;
-}
-#trash-divider:hover { color: var(--danger); }
-#trash-divider .trash-icon { font-size: 13px; }
-#trash-divider .trash-arrow { font-size: 9px; transition: transform .18s; }
-#trash-divider.open .trash-arrow { transform: rotate(90deg); }
-#trash-count {
-  margin-left: auto;
-  background: var(--bg4); color: var(--text3);
-  border-radius: 10px; padding: 0 6px; font-size: 10px; line-height: 18px;
-}
-#trash-count.has-items { background: rgba(229,62,62,.12); color: var(--danger); }
-
-#trash-tree { padding-bottom: 8px; }
-#trash-tree .tree-row { opacity: .7; }
-#trash-tree .tree-row:hover { opacity: 1; background: rgba(229,62,62,.07); }
-#trash-tree .tree-row.active { background: rgba(229,62,62,.12); opacity: 1; }
-#trash-tree .tree-icon { color: var(--danger) !important; }
-
-/* ══ DRAG AND DROP ══ */
-.tree-row[draggable="true"] { cursor: grab; }
-.tree-row[draggable="true"]:active { cursor: grabbing; }
-
-.tree-row.drag-over-inside {
-  background: var(--accent-l) !important;
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-  border-radius: 4px;
-}
-.tree-row.drag-over-before {
-  box-shadow: 0 -2px 0 0 var(--accent);
-}
-.tree-row.drag-over-after {
-  box-shadow: 0 2px 0 0 var(--accent);
-}
-
-/* ghost while dragging */
-.drag-ghost {
-  position: fixed; pointer-events: none; z-index: 99999;
-  background: var(--bg2); border: 1.5px solid var(--accent);
-  border-radius: var(--radius); padding: 5px 12px;
-  font-size: 12px; font-family: var(--font-ui); color: var(--accent2);
-  box-shadow: var(--shadow-md); white-space: nowrap; max-width: 200px;
-  overflow: hidden; text-overflow: ellipsis;
-  opacity: .92;
-}
