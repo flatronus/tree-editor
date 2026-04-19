@@ -58,6 +58,7 @@
         <option value="rich">Форматований</option>
       </select>
       <button id="btn-preview"    class="action-btn" title="Перегляд"><span class="btn-icon">&#9654;</span><span class="btn-label">&nbsp;Перегляд</span></button>
+      <button id="btn-emoji"      class="action-btn" title="Вставити смайлик / іконку"><span class="btn-icon">&#128512;</span><span class="btn-label">&nbsp;Іконки</span></button>
       <button id="btn-import"     class="action-btn" title="Імпорт файлу"><span class="btn-icon">&#8681;</span><span class="btn-label">&nbsp;Імпорт</span></button>
       <button id="btn-export-pdf" class="action-btn" title="Експорт PDF"><span class="btn-label">PDF</span></button>
       <button id="btn-save"       class="action-btn primary" title="Зберегти і синхронізувати (Ctrl+S)"><span class="btn-icon">&#128190;</span><span class="btn-label">&nbsp;Зберегти</span></button>
@@ -71,13 +72,6 @@
         <input id="search-input" type="text" placeholder="Пошук..." autocomplete="off">
       </div>
       <div id="tree-root" class="tree"></div>
-      <div id="trash-divider">
-        <span class="trash-icon">🗑</span>
-        <span>Корзина</span>
-        <span class="trash-arrow">&#9654;</span>
-        <span id="trash-count">0</span>
-      </div>
-      <div id="trash-tree" class="tree hidden"></div>
       <div id="sidebar-resizer"></div>
     </aside>
 
@@ -129,13 +123,7 @@
   <button data-action="add-child">Додати підсторінку</button>
   <button data-action="duplicate">Дублювати</button>
   <hr>
-  <button data-action="delete" class="danger">До корзини</button>
-</div>
-
-<div id="ctx-menu-trash" class="ctx-menu hidden">
-  <button data-action="restore">♻ Відновити</button>
-  <hr>
-  <button data-action="delete-forever" class="danger">✕ Видалити назавжди</button>
+  <button data-action="delete" class="danger">Видалити</button>
 </div>
 
 <div id="modal-overlay" class="hidden">
@@ -150,11 +138,10 @@
 
 <input type="file" id="file-input" accept=".txt,.md,.html" style="display:none">
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js" defer></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" defer></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js" defer></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js" defer></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="app.js" defer></script>
 <script>
 if ('serviceWorker' in navigator) {

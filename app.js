@@ -2,8 +2,7 @@
 //  ARKHIV — app.js
 // ════════════════════════════════════════════════════════════
 
-const ROOT_ID  = 'root';
-const TRASH_ID = 'trash';
+const ROOT_ID = 'root';
 const LS_KEY  = 'arkhiv_v3';
 const LS_SW   = 'arkhiv-sidebar-w';
 const LS_SO   = 'arkhiv-sidebar-open';
@@ -232,7 +231,7 @@ async function pullChangesFromDB() {
     // ── Видалити сторінки яких немає в БД ───────────────────
     const dbIds = new Set(allSnap.docs.map(d => d.id));
     Object.keys(state.pages).forEach(id => {
-      if (id === ROOT_ID || id === TRASH_ID) return;
+      if (id === ROOT_ID) return;
       if (!dbIds.has(id)) {
         const page = state.pages[id];
         if (page?.parentId && state.pages[page.parentId]) {
@@ -439,11 +438,8 @@ function uid() { return Date.now().toString(36) + Math.random().toString(36).sli
 function ensureRoot() {
   if (!state.pages[ROOT_ID]) {
     state.pages[ROOT_ID] = { id: ROOT_ID, title: 'Мій архів', content: '', format: 'plain', parentId: null, children: [], createdAt: Date.now(), updatedAt: Date.now() };
+    // Write root to Firestore so other devices see it
     if (fbReady) fbQueueWrite(state.pages[ROOT_ID]);
-  }
-  if (!state.pages[TRASH_ID]) {
-    state.pages[TRASH_ID] = { id: TRASH_ID, title: 'Корзина', content: '', format: 'plain', parentId: null, children: [], createdAt: Date.now(), updatedAt: Date.now() };
-    if (fbReady) fbQueueWrite(state.pages[TRASH_ID]);
   }
   Object.values(state.pages).forEach(p => { if (!Array.isArray(p.children)) p.children = []; });
 }
@@ -464,7 +460,9 @@ function rebuildChildrenFromParentId() {
   // For each parent: keep existing order, append missing, remove orphans
   Object.values(state.pages).forEach(p => {
     const expected = byParent[p.id] || new Set();
+    // Keep existing valid children in their current order
     const kept = (p.children || []).filter(c => expected.has(c));
+    // Append any new children not yet in the list (sorted by createdAt)
     const existing = new Set(kept);
     const newKids = [...expected].filter(c => !existing.has(c));
     newKids.sort((a, b) => (state.pages[a]?.createdAt || 0) - (state.pages[b]?.createdAt || 0));
@@ -494,48 +492,18 @@ function createPage(parentId) {
   return page;
 }
 
-// Move page (and subtree) to Trash instead of hard-deleting
 function deletePage(id) {
-  if (id === ROOT_ID || id === TRASH_ID) return;
+  if (id === ROOT_ID) return;
   const page = state.pages[id]; if (!page) return;
-  if (page.parentId === TRASH_ID) {
-    // Already in trash — hard delete
-    hardDeletePage(id);
-    return;
-  }
-  // Move to trash
-  const oldParent = state.pages[page.parentId];
-  if (oldParent) oldParent.children = oldParent.children.filter(c => c !== id);
-  page.parentId = TRASH_ID;
-  const trash = state.pages[TRASH_ID];
-  if (trash && !trash.children.includes(id)) trash.children.push(id);
-  page.updatedAt = Date.now();
-  saveState(); fbQueueWrite(page); flushWriteQueue();
-}
-
-// Hard-delete a page and all children (used for trash emptying)
-function hardDeletePage(id) {
-  if (id === ROOT_ID || id === TRASH_ID) return;
-  const page = state.pages[id]; if (!page) return;
-  [...(page.children || [])].forEach(hardDeletePage);
+  [...(page.children || [])].forEach(deletePage);
   const parent = state.pages[page.parentId];
-  if (parent) parent.children = parent.children.filter(c => c !== id);
+  if (parent) {
+    parent.children = parent.children.filter(c => c !== id);
+    // No need to write parent to Firestore — child deletion triggers rebuild on all devices
+  }
   fbDeletePage(id);
   delete state.pages[id];
   saveState();
-}
-
-// Restore a page from Trash back to root
-function restorePage(id) {
-  const page = state.pages[id]; if (!page) return;
-  const trash = state.pages[TRASH_ID];
-  if (trash) trash.children = trash.children.filter(c => c !== id);
-  page.parentId = ROOT_ID;
-  const root = state.pages[ROOT_ID];
-  if (root && !root.children.includes(id)) root.children.push(id);
-  page.updatedAt = Date.now();
-  expandState[ROOT_ID] = true;
-  saveState(); fbQueueWrite(page); flushWriteQueue();
 }
 
 function duplicatePage(id) {
@@ -590,29 +558,6 @@ function updateBreadcrumb(id) {
 }
 
 // ════════════════════════════════════════════════════════════
-//  DRAG-AND-DROP state
-// ════════════════════════════════════════════════════════════
-let dragId = null;
-let dragOverId = null;
-
-function movePage(id, newParentId) {
-  if (!id || !newParentId) return;
-  if (id === ROOT_ID || id === TRASH_ID) return;
-  if (id === newParentId) return;
-  if (isInSubtree(newParentId, id)) return; // can't move into own child
-  const page = state.pages[id]; if (!page) return;
-  const oldParent = state.pages[page.parentId];
-  if (oldParent) oldParent.children = oldParent.children.filter(c => c !== id);
-  page.parentId = newParentId;
-  const newParent = state.pages[newParentId];
-  if (newParent && !newParent.children.includes(id)) newParent.children.push(id);
-  page.updatedAt = Date.now();
-  expandState[newParentId] = true;
-  saveState(); fbQueueWrite(page); flushWriteQueue();
-  renderTree();
-}
-
-// ════════════════════════════════════════════════════════════
 //  RENDER TREE
 // ════════════════════════════════════════════════════════════
 function renderTree() {
@@ -620,48 +565,19 @@ function renderTree() {
   treeEl.innerHTML = '';
   const q = document.getElementById('search-input').value.trim().toLowerCase();
 
-  function attachDragEvents(row, id) {
-    if (id === ROOT_ID || id === TRASH_ID) {
-      // roots can be drop targets but not draggable
-      row.addEventListener('dragover', e => { e.preventDefault(); row.classList.add('drag-over'); });
-      row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
-      row.addEventListener('drop', e => {
-        e.preventDefault(); row.classList.remove('drag-over');
-        if (dragId && dragId !== id) movePage(dragId, id);
-        dragId = null;
-      });
-      return;
-    }
-    row.draggable = true;
-    row.addEventListener('dragstart', e => {
-      dragId = id;
-      e.dataTransfer.effectAllowed = 'move';
-      row.classList.add('dragging');
-    });
-    row.addEventListener('dragend', () => { dragId = null; row.classList.remove('dragging'); document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over')); });
-    row.addEventListener('dragover', e => { e.preventDefault(); if (dragId && dragId !== id) row.classList.add('drag-over'); });
-    row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
-    row.addEventListener('drop', e => {
-      e.preventDefault(); row.classList.remove('drag-over');
-      if (dragId && dragId !== id && !isInSubtree(id, dragId)) movePage(dragId, id);
-      dragId = null;
-    });
-  }
-
-  function buildNode(id, depth, inTrash) {
+  function buildNode(id, depth) {
     const page = state.pages[id]; if (!page) return null;
     const children = page.children || [];
     const hasKids = children.length > 0;
     const matchTitle = page.title.toLowerCase().includes(q);
-    const childNodes = children.map(c => buildNode(c, depth + 1, inTrash)).filter(Boolean);
+    const childNodes = children.map(c => buildNode(c, depth + 1)).filter(Boolean);
     if (q && !matchTitle && !childNodes.length) return null;
 
     const item = document.createElement('div');
     item.className = 'tree-item';
 
     const row = document.createElement('div');
-    const isTrashRoot = id === TRASH_ID;
-    row.className = 'tree-row' + (state.activeId === id ? ' active' : '') + (isTrashRoot ? ' trash-root' : '') + (inTrash && id !== TRASH_ID ? ' in-trash' : '');
+    row.className = 'tree-row' + (state.activeId === id ? ' active' : '');
     row.dataset.id = id;
     row.style.paddingLeft = (4 + depth * 13) + 'px';
     row.title = page.title;
@@ -680,25 +596,12 @@ function renderTree() {
       toggle.innerHTML = '<i class="tree-dot"></i>';
     }
 
-    // Icon
+    // Icon → page actions popup
     const icon = document.createElement('span');
     icon.className = 'tree-icon';
-    if (isTrashRoot) {
-      icon.textContent = '🗑';
-      icon.title = 'Корзина';
-    } else if (id === ROOT_ID) {
-      icon.textContent = '⌂';
-      icon.title = 'Зберегти / Експортувати гілку';
-      icon.addEventListener('click', e => { e.stopPropagation(); showPageActions(id, icon); });
-    } else if (inTrash) {
-      icon.textContent = '↩';
-      icon.title = 'Відновити';
-      icon.addEventListener('click', e => { e.stopPropagation(); restorePage(id); renderTree(); });
-    } else {
-      icon.textContent = '◻';
-      icon.title = 'Зберегти / Експортувати гілку';
-      icon.addEventListener('click', e => { e.stopPropagation(); showPageActions(id, icon); });
-    }
+    icon.title = 'Зберегти / Експортувати гілку';
+    icon.textContent = id === ROOT_ID ? '⌂' : '◻';
+    icon.addEventListener('click', e => { e.stopPropagation(); showPageActions(id, icon); });
 
     // Label
     const label = document.createElement('span');
@@ -706,25 +609,7 @@ function renderTree() {
     label.textContent = page.title;
 
     row.append(toggle, icon, label);
-
-    // Trash-root actions (empty trash button)
-    if (isTrashRoot && children.length > 0) {
-      const emptyBtn = document.createElement('span');
-      emptyBtn.className = 'trash-empty-btn';
-      emptyBtn.title = 'Очистити корзину';
-      emptyBtn.textContent = '✕';
-      emptyBtn.addEventListener('click', e => {
-        e.stopPropagation();
-        showModal('Остаточно видалити всі сторінки в корзині?', () => {
-          [...(state.pages[TRASH_ID]?.children || [])].forEach(hardDeletePage);
-          renderTree();
-        });
-      });
-      row.appendChild(emptyBtn);
-    }
-
     item.appendChild(row);
-    attachDragEvents(row, id);
 
     if (hasKids && (expandState[id] !== false || q)) {
       const wrap = document.createElement('div');
@@ -733,23 +618,13 @@ function renderTree() {
       item.appendChild(wrap);
     }
 
-    if (!isTrashRoot) {
-      row.addEventListener('click', e => { if (e.target === toggle || e.target === icon || e.target.classList.contains('trash-empty-btn')) return; openPage(id); });
-    }
+    row.addEventListener('click', e => { if (e.target === toggle || e.target === icon) return; openPage(id); });
     row.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e.clientX, e.clientY, id); });
     return item;
   }
 
-  const root = buildNode(ROOT_ID, 0, false);
+  const root = buildNode(ROOT_ID, 0);
   if (root) treeEl.appendChild(root);
-
-  // Separator
-  const sep = document.createElement('div');
-  sep.className = 'tree-separator';
-  treeEl.appendChild(sep);
-
-  const trash = buildNode(TRASH_ID, 0, true);
-  if (trash) treeEl.appendChild(trash);
 }
 
 // ════════════════════════════════════════════════════════════
@@ -812,32 +687,50 @@ function pageToHtml(page) {
 
 function exportBranchPDF(id) {
   const pages = collectSubtree(id);
-  const styles = `<style>
-    body{font-family:Georgia,serif;color:#111;font-size:11pt;line-height:1.75;margin:0;padding:0}
-    h1{font-size:15pt;font-weight:500;color:#1a1a2e;margin:14pt 0 3pt;border-bottom:1pt solid #4A90D9;padding-bottom:3pt}
-    h2{font-size:13pt;color:#2563a8;margin:11pt 0 3pt} h3{font-size:11pt;color:#4a5568;margin:8pt 0 2pt}
-    p{margin:4pt 0}ul,ol{padding-left:16pt;margin:4pt 0}
-    pre{background:#f5f7fa;border:0.5pt solid #e2e8f0;padding:6pt 9pt;white-space:pre-wrap;font-size:9pt;font-family:monospace}
-    code{background:#f0f2f5;padding:1pt 3pt;font-family:monospace;font-size:9pt;color:#c7254e}
-    blockquote{border-left:2pt solid #4A90D9;margin:6pt 0;padding-left:9pt;color:#4a5568;font-style:italic}
-    table{width:100%;border-collapse:collapse;margin:6pt 0}th{background:#eef2f8;border:0.5pt solid #cbd5e1;padding:3pt 6pt;font-weight:500}td{border:0.5pt solid #e2e8f0;padding:3pt 6pt}
-    hr{border:none;border-top:0.5pt solid #e2e8f0;margin:10pt 0 7pt}
-    .crumb{font-size:8pt;color:#94a3b8;margin-bottom:1pt;font-family:monospace}
-  </style>`;
+  const styles = `
+    @import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;1,400&family=Playfair+Display:wght@400;500&display=swap');
+    @page { margin: 18mm 20mm; }
+    * { box-sizing: border-box; }
+    body { font-family: 'Lora', Georgia, serif; color: #1a1a2e; font-size: 11pt; line-height: 1.8; background: #fff; margin: 0; padding: 0; }
+    h1 { font-family: 'Playfair Display', serif; font-size: 16pt; font-weight: 500; color: #1a1a2e; margin: 16pt 0 4pt; border-bottom: 1pt solid #4A90D9; padding-bottom: 4pt; page-break-after: avoid; }
+    h2 { font-family: 'Playfair Display', serif; font-size: 13pt; color: #2563a8; margin: 12pt 0 3pt; page-break-after: avoid; }
+    h3 { font-size: 11pt; color: #4a5568; margin: 9pt 0 2pt; page-break-after: avoid; }
+    p { margin: 4pt 0; orphans: 3; widows: 3; }
+    ul, ol { padding-left: 16pt; margin: 4pt 0; }
+    li { margin: 2pt 0; }
+    pre { background: #f5f7fa; border: 0.5pt solid #e2e8f0; padding: 7pt 10pt; white-space: pre-wrap; font-size: 9pt; font-family: 'Courier New', monospace; border-radius: 3pt; page-break-inside: avoid; }
+    code { background: #f0f2f5; padding: 1pt 3pt; font-family: 'Courier New', monospace; font-size: 9pt; color: #c7254e; border-radius: 2pt; }
+    pre code { background: none; color: inherit; padding: 0; }
+    blockquote { border-left: 2.5pt solid #4A90D9; margin: 6pt 0; padding: 2pt 0 2pt 10pt; color: #4a5568; font-style: italic; }
+    table { width: 100%; border-collapse: collapse; margin: 7pt 0; page-break-inside: avoid; }
+    th { background: #eef2f8; border: 0.5pt solid #cbd5e1; padding: 4pt 7pt; font-weight: 500; text-align: left; }
+    td { border: 0.5pt solid #e2e8f0; padding: 4pt 7pt; }
+    hr.page-sep { border: none; border-top: 1pt solid #e2e8f0; margin: 14pt 0; }
+    .crumb { font-size: 8pt; color: #94a3b8; margin-bottom: 2pt; font-family: 'Courier New', monospace; }
+    a { color: #2563a8; text-decoration: underline; }
+    @media print {
+      body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+    }
+  `;
   let body = '';
   pages.forEach((page, i) => {
-    body += (i > 0 ? '<hr>' : '') + `<div class="crumb">${getBreadcrumb(page.id)}</div><h1>${page.title}</h1>` + pageToHtml(page);
+    body += (i > 0 ? '<hr class="page-sep">' : '')
+      + `<div class="crumb">${getBreadcrumb(page.id)}</div>`
+      + `<h1>${page.title}</h1>`
+      + pageToHtml(page);
   });
-  const el = document.createElement('div');
-  el.style.cssText = 'padding:10mm 12mm;background:#fff';
-  el.innerHTML = styles + body;
-  if (typeof html2pdf !== 'undefined') {
-    html2pdf().set({ margin:[10,12,10,12], filename:(state.pages[id]?.title||'export')+'.pdf', html2canvas:{scale:2,useCORS:true}, jsPDF:{unit:'mm',format:'a4'}, pagebreak:{mode:['avoid-all','css']} }).from(el).save();
-  } else {
-    const w = window.open('', '_blank');
-    w.document.write('<!DOCTYPE html><html><body>' + el.innerHTML + '</body></html>');
-    w.document.close(); setTimeout(() => w.print(), 700);
-  }
+  const w = window.open('', '_blank');
+  if (!w) { alert('Дозвольте спливаючі вікна для експорту PDF'); return; }
+  const filename = (state.pages[id]?.title || 'export').replace(/[<>:"/\\|?*]/g, '_');
+  w.document.write(`<!DOCTYPE html><html lang="uk"><head>
+    <meta charset="UTF-8">
+    <title>${filename}</title>
+    <style>${styles}</style>
+  </head><body>${body}</body></html>`);
+  w.document.close();
+  w.addEventListener('load', () => {
+    setTimeout(() => { w.focus(); w.print(); }, 400);
+  });
 }
 
 function exportBranchTXT(id) {
@@ -971,24 +864,10 @@ let ctxTargetId = null;
 
 function showCtxMenu(x, y, id) {
   ctxTargetId = id;
-  const isRoot = id === ROOT_ID || id === TRASH_ID;
-  const inTrash = !isRoot && state.pages[id]?.parentId === TRASH_ID;
+  const isRoot = id === ROOT_ID;
   ctxMenu.querySelector('[data-action="delete"]').style.display    = isRoot ? 'none' : '';
-  ctxMenu.querySelector('[data-action="duplicate"]').style.display = (isRoot || inTrash) ? 'none' : '';
-  ctxMenu.querySelector('[data-action="rename"]').style.display    = isRoot ? 'none' : '';
-  ctxMenu.querySelector('[data-action="add-child"]').style.display = inTrash ? 'none' : '';
+  ctxMenu.querySelector('[data-action="duplicate"]').style.display = isRoot ? 'none' : '';
   ctxMenu.querySelectorAll('hr').forEach(hr => hr.style.display = isRoot ? 'none' : '');
-  // trash-specific buttons
-  let restoreBtn = ctxMenu.querySelector('[data-action="restore"]');
-  if (!restoreBtn) {
-    restoreBtn = document.createElement('button');
-    restoreBtn.dataset.action = 'restore';
-    restoreBtn.textContent = 'Відновити';
-    ctxMenu.insertBefore(restoreBtn, ctxMenu.querySelector('[data-action="delete"]'));
-  }
-  restoreBtn.style.display = inTrash ? '' : 'none';
-  const deleteBtn = ctxMenu.querySelector('[data-action="delete"]');
-  deleteBtn.textContent = inTrash ? 'Видалити назавжди' : 'Видалити';
   ctxMenu.classList.remove('hidden');
   ctxMenu.style.left = Math.min(x, window.innerWidth - 200) + 'px';
   ctxMenu.style.top  = Math.min(y, window.innerHeight - 180) + 'px';
@@ -999,14 +878,11 @@ ctxMenu.addEventListener('click', e => {
   const btn = e.target.closest('button'); if (!btn) return;
   const action = btn.dataset.action, id = ctxTargetId;
   ctxMenu.classList.add('hidden');
-  const inTrash = state.pages[id]?.parentId === TRASH_ID;
-  if (action === 'restore') {
-    restorePage(id); renderTree();
-  } else if (action === 'rename') {
+  if (action === 'rename') {
     startInlineRename(id);
   } else if (action === 'add-child') {
     const child = createPage(id);
-    expandState[id] = true;
+    expandState[id] = true;   // expand parent
     renderTree();
     openPage(child.id);
     setTimeout(() => startInlineRename(child.id), 120);
@@ -1014,21 +890,12 @@ ctxMenu.addEventListener('click', e => {
     const np = duplicatePage(id);
     if (np) { expandState[np.parentId] = true; renderTree(); openPage(np.id); }
   } else if (action === 'delete') {
-    if (inTrash) {
-      showModal(`Остаточно видалити "${state.pages[id]?.title}" та всі підсторінки?`, () => {
-        const wasActive = isInSubtree(state.activeId, id);
-        hardDeletePage(id);
-        if (wasActive) { state.activeId = null; document.getElementById('editor-wrap').classList.add('hidden'); document.getElementById('empty-state').classList.remove('hidden'); }
-        renderTree();
-      });
-    } else {
-      showModal(`Перемістити "${state.pages[id]?.title}" до корзини?`, () => {
-        const wasActive = isInSubtree(state.activeId, id);
-        deletePage(id);
-        if (wasActive) { state.activeId = null; document.getElementById('editor-wrap').classList.add('hidden'); document.getElementById('empty-state').classList.remove('hidden'); }
-        renderTree();
-      });
-    }
+    showModal(`Видалити "${state.pages[id]?.title}" та всі підсторінки?`, () => {
+      const wasActive = isInSubtree(state.activeId, id);
+      deletePage(id);
+      if (wasActive) { state.activeId = null; document.getElementById('editor-wrap').classList.add('hidden'); document.getElementById('empty-state').classList.remove('hidden'); }
+      renderTree();
+    });
   }
 });
 
@@ -1156,23 +1023,13 @@ document.getElementById('btn-save').addEventListener('click', () => {
 });
 
 document.getElementById('btn-delete-page').addEventListener('click', () => {
-  const id = state.activeId; if (!id || id === ROOT_ID || id === TRASH_ID) return;
-  const inTrash = state.pages[id]?.parentId === TRASH_ID;
-  if (inTrash) {
-    showModal(`Остаточно видалити "${state.pages[id]?.title}"?`, () => {
-      hardDeletePage(id); state.activeId = null;
-      document.getElementById('editor-wrap').classList.add('hidden');
-      document.getElementById('empty-state').classList.remove('hidden');
-      renderTree();
-    });
-  } else {
-    showModal(`Перемістити "${state.pages[id]?.title}" до корзини?`, () => {
-      deletePage(id); state.activeId = null;
-      document.getElementById('editor-wrap').classList.add('hidden');
-      document.getElementById('empty-state').classList.remove('hidden');
-      renderTree();
-    });
-  }
+  const id = state.activeId; if (!id || id === ROOT_ID) return;
+  showModal(`Видалити "${state.pages[id]?.title}"?`, () => {
+    deletePage(id); state.activeId = null;
+    document.getElementById('editor-wrap').classList.add('hidden');
+    document.getElementById('empty-state').classList.remove('hidden');
+    renderTree();
+  });
 });
 
 document.getElementById('btn-preview').addEventListener('click', togglePreview);
@@ -1202,6 +1059,193 @@ document.getElementById('page-title').addEventListener('input', e => {
 document.getElementById('editor-plain').addEventListener('input', () => { unsaved = true; setSyncStatus('pending'); updateWordCount(); if (state.pages[state.activeId]?.format === 'auto') updateStatusFormat(detectFormat(document.getElementById('editor-plain').value)); });
 document.getElementById('editor-rich').addEventListener('input', () => { unsaved = true; setSyncStatus('pending'); updateWordCount(); });
 document.getElementById('search-input').addEventListener('input', renderTree);
+
+// ════════════════════════════════════════════════════════════
+//  EMOJI / ICON PICKER
+// ════════════════════════════════════════════════════════════
+const EMOJI_CATEGORIES = [
+  { label: '😊 Емоції', emojis: ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','😗','☺️','😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄','😬','🤥','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤧','🥵','🥶','🥴','😵','🤯','🤠','🥳','🥸','😎','🤓','🧐','😕','😟','🙁','☹️','😮','😯','😲','😳','🥺','😦','😧','😨','😰','😥','😢','😭','😱','😖','😣','😞','😓','😩','😫','🥱','😤','😡','😠','🤬','😈','👿'] },
+  { label: '👍 Жести', emojis: ['👋','🤚','🖐️','✋','🖖','👌','🤌','🤏','✌️','🤞','🤟','🤘','🤙','👈','👉','👆','🖕','👇','☝️','👍','👎','✊','👊','🤛','🤜','👏','🙌','👐','🤲','🤝','🙏','✍️','💅','🤳','💪','🦵','🦶','👂','🦻','👃','🧠','🦷','🦴','👀','👁️','👅','👄','💋','🩸'] },
+  { label: '❤️ Символи', emojis: ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','💟','☮️','✝️','☪️','🕉️','✡️','🔯','🕎','☯️','☦️','🛐','⛎','♈','♉','♊','♋','♌','♍','♎','♏','♐','♑','♒','♓','🆔','⚛️','🉑','☢️','☣️','📴','📳','🈶','🈚','🈸','🈺','🈷️','✴️','🆚','💮','🉐','㊙️','㊗️','🈴','🈵','🈹','🈲','🅰️','🅱️','🆎','🆑','🅾️','🆘','❌','⭕','🛑','⛔','📛','🚫','💯','💢','♨️','🚷','🚯','🚳','🚱','🔞','📵','🚭','❗','❕','❓','❔','‼️','⁉️','🔅','🔆','〽️','⚠️','🔱','♻️','✅','🈯','💹','❎','🌐','💠','Ⓜ️','🌀','💤','🏧','🚾','♿','🅿️','🛗','🈳','🈹','🚺','🚹','🚼','⚧️','🚻','🚮','🎦','📶','🈁','🔣','ℹ️','🔤','🔡','🔠','🆖','🆗','🆙','🆒','🆕','🆓','0️⃣','1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟','🔢','▶️','⏸️','⏯️','⏹️','⏺️','⏭️','⏮️','⏩','⏪','⏫','⏬','◀️','🔼','🔽','➡️','⬅️','⬆️','⬇️','↗️','↘️','↙️','↖️','↕️','↔️','↪️','↩️','⤴️','⤵️','🔀','🔁','🔂','🔃','🎵','🎶','➕','➖','➗','✖️','♾️','💲','💱','‼️','⁉️','🔴','🟠','🟡','🟢','🔵','🟣','⚫','⚪','🟤','🔺','🔻','🔷','🔶','🔹','🔸','🔳','🔲','▪️','▫️','◾','◽','◼️','◻️','🟥','🟧','🟨','🟩','🟦','🟪','⬛','⬜','🟫','🔈','🔇','🔉','🔊','📢','📣','📯','🔔','🔕'] },
+  { label: '🌟 Природа', emojis: ['🌸','🌺','🌻','🌹','🥀','🌷','🌼','💐','🍀','🌿','🍃','🍂','🍁','🍄','🌾','☘️','🌱','🌲','🌳','🌴','🌵','🎋','🎍','🪴','🌍','🌎','🌏','🌐','🌑','🌒','🌓','🌔','🌕','🌖','🌗','🌘','🌙','🌚','🌛','🌜','🌝','🌞','⭐','🌟','💫','✨','⚡','🔥','💥','❄️','🌊','🌀','🌈','☁️','⛅','🌤️','🌥️','🌦️','🌧️','⛈️','🌩️','🌨️','🌪️','🌫️','🌬️','🌂','☂️','☔','⛱️','⚡','❄️','🌊','💧','💦','☃️','⛄','🌬️','🍎','🍊','🍋','🍇','🍓','🍒','🍑','🥭','🍍','🥥','🥝','🍅','🍆','🥑','🥦','🥕','🌽','🧅','🧄','🥔','🍠','🥐','🥖','🫓','🥨','🧀','🥚','🍳','🧈','🥞','🧇','🥓','🥩','🍗','🍖','🦴','🌭','🍔','🍟','🍕','🫔','🌮','🌯','🫙','🧆','🥚','🍱','🍘','🍣','🍤','🍙','🍚','🍛','🍜','🍝','🍞','🥗','🥘','🫕','🍲','🫗','🥣','🥫','🧂','🍿','🧃','🥤','🧋','☕','🍵','🫖','🧉','🍺','🍻','🥂','🍷','🥃','🍸','🍹','🍾','🫗','🍶','🧊'] },
+  { label: '🏠 Речі', emojis: ['⌚','📱','💻','🖥️','🖨️','⌨️','🖱️','🖲️','💽','💾','💿','📀','📷','📸','📹','🎥','📽️','🎞️','📞','☎️','📟','📠','📺','📻','🧭','⏱️','⏲️','⏰','🕰️','⌛','⏳','📡','🔋','🔌','💡','🔦','🕯️','🪔','🧯','🛢️','💰','💴','💵','💶','💷','💸','💳','🪙','💎','⚖️','🪜','🧲','🔧','🪛','🔩','⚙️','🗜️','🪤','⛏️','⚒️','🛠️','🗡️','⚔️','🛡️','🔫','🪃','🏹','🪚','🔨','🪓','🗝️','🔑','🚪','🪞','🪟','🛋️','🪑','🚽','🪠','🚿','🛁','🪤','🧴','🧷','🧹','🧺','🧻','🪣','🧼','🫧','🪥','🧽','🧯','🛒','🚬','⚰️','🪦','⚱️','🧿','💈','⚗️','🔭','🔬','🩺','🩻','🩹','💊','💉','🩸','🧬','🦠','🧫','🧪','🌡️','🫀','🫁','🧠','🦷','🦴','👁️','📦','📫','📪','📬','📭','📮','🗳️','✏️','✒️','🖊️','🖋️','📝','📁','📂','🗂️','📅','📆','🗒️','🗓️','📇','📈','📉','📊','📋','📌','📍','🗺️','🗃️','🗄️','🗑️','📏','📐','✂️','🗃️','📎','🖇️','📌','🔏','🔒','🔓','🔐'] },
+  { label: '🎉 Активності', emojis: ['⚽','🏀','🏈','⚾','🥎','🏐','🏉','🎾','🥏','🎱','🪀','🏓','🏸','🏒','🏑','🥍','🏏','🪃','🥅','⛳','🪁','🎣','🤿','🎽','🎿','🛷','🥌','🎯','🪀','🪆','🎮','🕹️','🎲','♟️','🎭','🎨','🖼️','🎪','🤹','🎠','🎡','🎢','🎪','🎤','🎧','🎼','🎹','🥁','🪘','🎷','🎺','🎸','🪕','🎻','🪗','🎬','🎤','🎭','🎨','🖌️','🖍️','📚','📖','📰','🗞️','📓','📔','📒','📕','📗','📘','📙','📃','📄','📑','🗒️','📊','📈','📉','🗃️','🗂️','🗄️','📥','📤','📦','📫','📪','📬','📭','📮','📯','📢','📣','📡','🔔','🔕','🎵','🎶','💿','📀','🎞️','📽️','🎥','📺','📻','🎙️','🎚️','🎛️','⏏️'] },
+  { label: '🚀 Транспорт', emojis: ['🚗','🚕','🚙','🚌','🚎','🏎️','🚓','🚑','🚒','🚐','🛻','🚚','🚛','🚜','🏍️','🛵','🛺','🚲','🛴','🛹','🛼','🚏','🛣️','🛤️','⛽','🚨','🚥','🚦','🛑','⚓','🚢','✈️','🛫','🛬','🛩️','💺','🚁','🛸','🚀','🛰️','🛶','⛵','🚤','🛥️','🛳️','⛴️','🚂','🚃','🚄','🚅','🚆','🚇','🚈','🚉','🚊','🚝','🚞','🚋','🚍','🚎','🚐','🚑','🚒','🚓','🚔','🚖','🚗','🚘','🚙','🛻','🚚','🚛','🚜','🏎️','🏍️','🛵','🛺','🚲','🛴','🛹','🛼'] },
+  { label: '🏢 Місця', emojis: ['🏠','🏡','🏢','🏣','🏤','🏥','🏦','🏧','🏨','🏩','🏪','🏫','🏬','🏭','🏯','🏰','💒','🗼','🗽','⛪','🕌','🛕','🕍','⛩️','🕋','⛲','⛺','🏕️','🌁','🌃','🌄','🌅','🌆','🌇','🌉','🌌','🌠','🎇','🎆','🎑','🏞️','🌋','🗻','🏔️','⛰️','🏝️','🏜️','🏖️','🏗️','🏘️','🏚️','🛖','🗺️'] },
+];
+
+// Store last cursor position in active editable element
+let lastCaretTarget = null;
+let lastCaretOffset = null;
+let lastCaretNode   = null;
+
+function rememberCaret() {
+  const active = document.activeElement;
+  if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) {
+    lastCaretTarget = active;
+    lastCaretOffset = active.selectionStart;
+    lastCaretNode   = null;
+  } else {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0) {
+      const range = sel.getRangeAt(0);
+      lastCaretNode   = range.startContainer;
+      lastCaretOffset = range.startOffset;
+      lastCaretTarget = null;
+    }
+  }
+}
+
+function insertEmoji(emoji) {
+  if (lastCaretTarget) {
+    const el  = lastCaretTarget;
+    const pos = lastCaretOffset ?? el.value.length;
+    el.value = el.value.slice(0, pos) + emoji + el.value.slice(pos);
+    el.selectionStart = el.selectionEnd = pos + emoji.length;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.focus();
+  } else if (lastCaretNode) {
+    const sel = window.getSelection();
+    const range = document.createRange();
+    try {
+      range.setStart(lastCaretNode, lastCaretOffset);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.execCommand('insertText', false, emoji);
+    } catch {
+      // fallback: insert at end of rich editor
+      const rich = document.getElementById('editor-rich');
+      if (rich) { rich.focus(); document.execCommand('insertText', false, emoji); }
+    }
+  } else {
+    // No saved caret — try inserting in whichever editor is visible
+    const plain = document.getElementById('editor-plain');
+    const rich  = document.getElementById('editor-rich');
+    if (plain && !plain.classList.contains('hidden')) {
+      plain.focus();
+      const p = plain.selectionStart ?? plain.value.length;
+      plain.value = plain.value.slice(0, p) + emoji + plain.value.slice(p);
+      plain.selectionStart = plain.selectionEnd = p + emoji.length;
+      plain.dispatchEvent(new Event('input', { bubbles: true }));
+    } else if (rich && !rich.classList.contains('hidden')) {
+      rich.focus();
+      document.execCommand('insertText', false, emoji);
+    } else {
+      // Insert in title field
+      const title = document.getElementById('page-title');
+      if (title) {
+        const p = title.selectionStart ?? title.value.length;
+        title.value = title.value.slice(0, p) + emoji + title.value.slice(p);
+        title.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    }
+  }
+  closeEmojiPicker();
+}
+
+function closeEmojiPicker() {
+  document.getElementById('emoji-picker-popup')?.remove();
+}
+
+function openEmojiPicker(anchorBtn) {
+  closeEmojiPicker();
+
+  const popup = document.createElement('div');
+  popup.id = 'emoji-picker-popup';
+  popup.className = 'emoji-picker-popup';
+
+  // Search
+  const searchWrap = document.createElement('div');
+  searchWrap.className = 'emoji-search-wrap';
+  const searchInput = document.createElement('input');
+  searchInput.type = 'text';
+  searchInput.placeholder = 'Пошук...';
+  searchInput.className = 'emoji-search';
+  searchWrap.appendChild(searchInput);
+  popup.appendChild(searchWrap);
+
+  // Category tabs
+  const tabs = document.createElement('div');
+  tabs.className = 'emoji-tabs';
+  EMOJI_CATEGORIES.forEach((cat, i) => {
+    const tab = document.createElement('button');
+    tab.className = 'emoji-tab' + (i === 0 ? ' active' : '');
+    tab.title = cat.label;
+    tab.textContent = cat.emojis[0];
+    tab.addEventListener('click', () => {
+      tabs.querySelectorAll('.emoji-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      renderGrid(cat.emojis);
+    });
+    tabs.appendChild(tab);
+  });
+  popup.appendChild(tabs);
+
+  // Grid
+  const grid = document.createElement('div');
+  grid.className = 'emoji-grid';
+  popup.appendChild(grid);
+
+  function renderGrid(emojis) {
+    grid.innerHTML = '';
+    emojis.forEach(e => {
+      const btn = document.createElement('button');
+      btn.className = 'emoji-btn';
+      btn.textContent = e;
+      btn.title = e;
+      btn.addEventListener('mousedown', ev => { ev.preventDefault(); insertEmoji(e); });
+      grid.appendChild(btn);
+    });
+  }
+
+  renderGrid(EMOJI_CATEGORIES[0].emojis);
+
+  searchInput.addEventListener('input', () => {
+    const q = searchInput.value.trim().toLowerCase();
+    if (!q) { renderGrid(EMOJI_CATEGORIES[0].emojis); return; }
+    const all = EMOJI_CATEGORIES.flatMap(c => c.emojis);
+    renderGrid(all.filter(e => e.includes(q)));
+  });
+
+  document.body.appendChild(popup);
+
+  // Position below anchor
+  const rect = anchorBtn.getBoundingClientRect();
+  const pw = 320, ph = 340;
+  let left = rect.left;
+  let top  = rect.bottom + 6;
+  if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
+  if (top + ph > window.innerHeight - 8) top = rect.top - ph - 6;
+  popup.style.left = left + 'px';
+  popup.style.top  = top  + 'px';
+
+  searchInput.focus();
+
+  // Close on outside click
+  setTimeout(() => {
+    document.addEventListener('mousedown', function outsideClose(ev) {
+      if (!popup.contains(ev.target) && ev.target !== anchorBtn) {
+        closeEmojiPicker();
+        document.removeEventListener('mousedown', outsideClose);
+      }
+    });
+  }, 0);
+}
+
+// Track caret on all relevant elements
+['editor-plain', 'editor-rich', 'page-title'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) {
+    el.addEventListener('mouseup', rememberCaret);
+    el.addEventListener('keyup',   rememberCaret);
+    el.addEventListener('focus',   rememberCaret);
+  }
+});
+
+document.getElementById('btn-emoji').addEventListener('click', () => {
+  openEmojiPicker(document.getElementById('btn-emoji'));
+});
 
 // ════════════════════════════════════════════════════════════
 //  KEYBOARD
