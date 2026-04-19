@@ -45,16 +45,33 @@ const localWrites = new Map(); // id → updatedAt of our write
 //  FIREBASE INIT
 // ════════════════════════════════════════════════════════════
 function initFirebase() {
-  if (!firebase.apps.length) firebase.initializeApp(FB_CONFIG);
-  db   = firebase.firestore();
-  auth = firebase.auth();
+  // Якщо Firebase SDK не завантажився — показуємо форму входу
+  if (typeof firebase === 'undefined' || !firebase.app) {
+    showLoginForm();
+    return;
+  }
 
-  // Offline persistence (works even without internet)
+  try {
+    if (!firebase.apps.length) firebase.initializeApp(FB_CONFIG);
+    db   = firebase.firestore();
+    auth = firebase.auth();
+  } catch (e) {
+    console.error('Firebase init error', e);
+    showLoginForm();
+    return;
+  }
+
+  // Persistence — тихо ігноруємо помилку (Safari, multiple tabs, etc.)
   db.enablePersistence({ synchronizeTabs: true }).catch(() => {});
 
-  // This is the single source of truth for auth state
-  // It fires once immediately on load with the cached session
+  // Таймаут: якщо onAuthStateChanged не відповів за 6с — показуємо форму
+  const authTimeout = setTimeout(() => {
+    console.warn('Firebase auth timeout — showing login form');
+    showLoginForm();
+  }, 6000);
+
   auth.onAuthStateChanged(user => {
+    clearTimeout(authTimeout);
     if (user) {
       currentUid = user.uid;
       fbReady    = true;
@@ -64,7 +81,16 @@ function initFirebase() {
       fbReady    = false;
       onLogout();
     }
+  }, err => {
+    clearTimeout(authTimeout);
+    console.error('onAuthStateChanged error', err);
+    showLoginForm();
   });
+}
+
+function showLoginForm() {
+  document.getElementById('auth-spinner-wrap').classList.add('hidden');
+  document.getElementById('auth-forms').classList.remove('hidden');
 }
 
 // Called when user is confirmed logged in
@@ -92,9 +118,7 @@ function onLogout() {
   stopPolling();
   document.getElementById('app').classList.add('hidden');
   document.getElementById('auth-overlay').classList.remove('hidden');
-  // Show login form (not spinner)
-  document.getElementById('auth-spinner-wrap').classList.add('hidden');
-  document.getElementById('auth-forms').classList.remove('hidden');
+  showLoginForm();
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1400,5 +1424,10 @@ renderTree();
 if (state.activeId && state.pages[state.activeId]) openPage(state.activeId);
 else openPage(ROOT_ID);
 
-// Firebase init — auth overlay shows/hides automatically via onAuthStateChanged
-window.addEventListener('load', () => initFirebase());
+// Firebase init — запускаємо одразу, не чекаємо window.load
+// SDK вже завантажений синхронно через <script> теги в HTML
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initFirebase);
+} else {
+  initFirebase();
+}
