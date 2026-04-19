@@ -1,5 +1,5 @@
 // ── Arkhiv Service Worker ──────────────────────────────────
-const CACHE_NAME = 'arkhiv-v3';
+const CACHE_NAME = 'arkhiv-v5';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -11,7 +11,7 @@ const STATIC_ASSETS = [
   './icon-180.png',
 ];
 
-// CDN assets to cache on first fetch
+// CDN assets to cache on first fetch (НЕ Firebase — він завжди з мережі)
 const CDN_ORIGINS = [
   'cdnjs.cloudflare.com',
   'fonts.googleapis.com',
@@ -42,10 +42,11 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // Firebase / Firestore — always network, no cache
+  // Firebase / Firestore / gstatic — завжди з мережі, ніколи не кешуємо
   if (url.hostname.includes('firebase') ||
       url.hostname.includes('firestore') ||
-      url.hostname.includes('googleapis.com') && url.pathname.includes('firestore')) {
+      url.hostname.includes('gstatic.com') ||
+      (url.hostname.includes('googleapis.com') && url.pathname.includes('firestore'))) {
     return; // let browser handle it
   }
 

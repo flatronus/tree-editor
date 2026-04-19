@@ -45,8 +45,12 @@ const localWrites = new Map(); // id → updatedAt of our write
 //  FIREBASE INIT
 // ════════════════════════════════════════════════════════════
 function initFirebase() {
-  // Якщо Firebase SDK не завантажився — показуємо форму входу
-  if (typeof firebase === 'undefined' || !firebase.app) {
+  // Перевіряємо що всі потрібні частини Firebase SDK завантажились
+  if (typeof firebase === 'undefined' ||
+      typeof firebase.initializeApp !== 'function' ||
+      typeof firebase.auth !== 'function' ||
+      typeof firebase.firestore !== 'function') {
+    console.error('Firebase SDK не завантажився');
     showLoginForm();
     return;
   }
