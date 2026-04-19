@@ -2,7 +2,8 @@
 //  ARKHIV — app.js
 // ════════════════════════════════════════════════════════════
 
-const ROOT_ID = 'root';
+const ROOT_ID  = 'root';
+const TRASH_ID = 'trash';
 const LS_KEY  = 'arkhiv_v3';
 const LS_SW   = 'arkhiv-sidebar-w';
 const LS_SO   = 'arkhiv-sidebar-open';
@@ -231,7 +232,7 @@ async function pullChangesFromDB() {
     // ── Видалити сторінки яких немає в БД ───────────────────
     const dbIds = new Set(allSnap.docs.map(d => d.id));
     Object.keys(state.pages).forEach(id => {
-      if (id === ROOT_ID) return;
+      if (id === ROOT_ID || id === TRASH_ID) return;
       if (!dbIds.has(id)) {
         const page = state.pages[id];
         if (page?.parentId && state.pages[page.parentId]) {
@@ -438,8 +439,11 @@ function uid() { return Date.now().toString(36) + Math.random().toString(36).sli
 function ensureRoot() {
   if (!state.pages[ROOT_ID]) {
     state.pages[ROOT_ID] = { id: ROOT_ID, title: 'Мій архів', content: '', format: 'plain', parentId: null, children: [], createdAt: Date.now(), updatedAt: Date.now() };
-    // Write root to Firestore so other devices see it
     if (fbReady) fbQueueWrite(state.pages[ROOT_ID]);
+  }
+  if (!state.pages[TRASH_ID]) {
+    state.pages[TRASH_ID] = { id: TRASH_ID, title: 'Корзина', content: '', format: 'plain', parentId: null, children: [], createdAt: Date.now(), updatedAt: Date.now(), isTrash: true };
+    if (fbReady) fbQueueWrite(state.pages[TRASH_ID]);
   }
   Object.values(state.pages).forEach(p => { if (!Array.isArray(p.children)) p.children = []; });
 }
@@ -492,18 +496,75 @@ function createPage(parentId) {
   return page;
 }
 
-function deletePage(id) {
-  if (id === ROOT_ID) return;
+// Переміщення в Корзину (м'яке видалення)
+function moveToTrash(id) {
+  if (id === ROOT_ID || id === TRASH_ID) return;
   const page = state.pages[id]; if (!page) return;
-  [...(page.children || [])].forEach(deletePage);
+  if (isInSubtree(id, TRASH_ID)) return; // вже в корзині
+
+  // Від'єднуємо від батька
   const parent = state.pages[page.parentId];
-  if (parent) {
-    parent.children = parent.children.filter(c => c !== id);
-    // No need to write parent to Firestore — child deletion triggers rebuild on all devices
-  }
+  if (parent) parent.children = parent.children.filter(c => c !== id);
+
+  // Зберігаємо оригінальний батько для відновлення
+  page._prevParentId = page.parentId;
+  page.parentId = TRASH_ID;
+  page.updatedAt = Date.now();
+
+  const trash = state.pages[TRASH_ID];
+  if (trash && !trash.children.includes(id)) trash.children.push(id);
+
+  // Зберігаємо всю гілку (рекурсивно позначаємо як "в корзині")
+  collectSubtree(id).forEach(p => { fbQueueWrite(p); });
+  fbQueueWrite(state.pages[TRASH_ID]);
+  saveState();
+  flushWriteQueue();
+}
+
+// Відновлення з Корзини
+function restorePage(id) {
+  const page = state.pages[id]; if (!page) return;
+
+  // Відновлюємо до попереднього батька (або root якщо той вже видалено)
+  const targetParentId = (page._prevParentId && state.pages[page._prevParentId] && !isInSubtree(page._prevParentId, TRASH_ID))
+    ? page._prevParentId : ROOT_ID;
+
+  // Від'єднуємо від Корзини
+  const trash = state.pages[TRASH_ID];
+  if (trash) trash.children = trash.children.filter(c => c !== id);
+
+  page.parentId = targetParentId;
+  delete page._prevParentId;
+  page.updatedAt = Date.now();
+
+  const target = state.pages[targetParentId];
+  if (target && !target.children.includes(id)) target.children.push(id);
+
+  fbQueueWrite(page);
+  fbQueueWrite(state.pages[TRASH_ID]);
+  saveState();
+  flushWriteQueue();
+}
+
+// Остаточне видалення (тільки з Корзини)
+function permanentlyDeletePage(id) {
+  if (id === ROOT_ID || id === TRASH_ID) return;
+  const page = state.pages[id]; if (!page) return;
+
+  // Рекурсивно видаляємо всі дочірні
+  [...(page.children || [])].forEach(permanentlyDeletePage);
+
+  const parent = state.pages[page.parentId];
+  if (parent) parent.children = parent.children.filter(c => c !== id);
+
   fbDeletePage(id);
   delete state.pages[id];
   saveState();
+}
+
+// Стара функція — тепер переміщає в корзину (сумісність)
+function deletePage(id) {
+  moveToTrash(id);
 }
 
 function duplicatePage(id) {
@@ -516,8 +577,36 @@ function duplicatePage(id) {
   return np;
 }
 
-// ════════════════════════════════════════════════════════════
-//  FORMAT
+// Переміщення гілки до нового батька (drag-and-drop)
+function movePage(id, newParentId, insertBeforeId = null) {
+  if (!id || id === ROOT_ID || id === TRASH_ID) return;
+  if (id === newParentId) return;
+  if (isInSubtree(newParentId, id)) return; // не можна перемістити в нащадка
+
+  const page = state.pages[id]; if (!page) return;
+  const oldParent = state.pages[page.parentId];
+  const newParent = state.pages[newParentId]; if (!newParent) return;
+
+  // Від'єднуємо від старого батька
+  if (oldParent) oldParent.children = oldParent.children.filter(c => c !== id);
+
+  page.parentId = newParentId;
+  page.updatedAt = Date.now();
+
+  // Вставляємо на потрібну позицію
+  if (!Array.isArray(newParent.children)) newParent.children = [];
+  newParent.children = newParent.children.filter(c => c !== id);
+  if (insertBeforeId && newParent.children.includes(insertBeforeId)) {
+    const idx = newParent.children.indexOf(insertBeforeId);
+    newParent.children.splice(idx, 0, id);
+  } else {
+    newParent.children.push(id);
+  }
+
+  fbQueueWrite(page);
+  saveState();
+  flushWriteQueue();
+}
 // ════════════════════════════════════════════════════════════
 function detectFormat(text) {
   if (!text || !text.trim()) return 'plain';
@@ -558,19 +647,49 @@ function updateBreadcrumb(id) {
 }
 
 // ════════════════════════════════════════════════════════════
+//  DRAG AND DROP STATE
+// ════════════════════════════════════════════════════════════
+let dragId       = null; // id сторінки що перетягується
+let dragGhost    = null; // ghost DOM елемент
+let dragOverRow  = null; // поточний row під курсором
+let dragOverMode = null; // 'inside' | 'before' | 'after'
+
+function createDragGhost(title) {
+  removeDragGhost();
+  dragGhost = document.createElement('div');
+  dragGhost.className = 'drag-ghost';
+  dragGhost.textContent = '◻ ' + title;
+  document.body.appendChild(dragGhost);
+}
+function removeDragGhost() {
+  if (dragGhost) { dragGhost.remove(); dragGhost = null; }
+}
+function clearDragHighlight() {
+  if (dragOverRow) {
+    dragOverRow.classList.remove('drag-over-inside','drag-over-before','drag-over-after');
+    dragOverRow = null; dragOverMode = null;
+  }
+}
+
+// ════════════════════════════════════════════════════════════
 //  RENDER TREE
 // ════════════════════════════════════════════════════════════
 function renderTree() {
-  const treeEl = document.getElementById('tree-root');
+  const treeEl   = document.getElementById('tree-root');
+  const trashEl  = document.getElementById('trash-tree');
+  const trashDiv = document.getElementById('trash-divider');
   treeEl.innerHTML = '';
+  trashEl.innerHTML = '';
+
   const q = document.getElementById('search-input').value.trim().toLowerCase();
 
-  function buildNode(id, depth) {
+  // ── Build a single tree node ──────────────────────────────
+  function buildNode(id, depth, inTrash) {
     const page = state.pages[id]; if (!page) return null;
     const children = page.children || [];
-    const hasKids = children.length > 0;
+    const hasKids  = children.length > 0;
     const matchTitle = page.title.toLowerCase().includes(q);
-    const childNodes = children.map(c => buildNode(c, depth + 1)).filter(Boolean);
+    const childNodes = children.map(c => buildNode(c, depth + 1, inTrash)).filter(Boolean);
     if (q && !matchTitle && !childNodes.length) return null;
 
     const item = document.createElement('div');
@@ -582,7 +701,104 @@ function renderTree() {
     row.style.paddingLeft = (4 + depth * 13) + 'px';
     row.title = page.title;
 
-    // Toggle
+    // ── Drag-and-drop (тільки поза корзиною) ─────────────────
+    const isSpecial = (id === ROOT_ID || id === TRASH_ID);
+    if (!inTrash && !isSpecial) {
+      row.draggable = true;
+
+      row.addEventListener('dragstart', e => {
+        dragId = id;
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', id);
+        createDragGhost(page.title);
+        // Приховуємо стандартний drag image
+        const blank = document.createElement('div');
+        blank.style.cssText = 'position:fixed;top:-9999px';
+        document.body.appendChild(blank);
+        e.dataTransfer.setDragImage(blank, 0, 0);
+        setTimeout(() => blank.remove(), 0);
+        row.style.opacity = '.4';
+      });
+
+      row.addEventListener('dragend', () => {
+        row.style.opacity = '';
+        removeDragGhost();
+        clearDragHighlight();
+        dragId = null;
+      });
+    }
+
+    // Dragover — для будь-якого рядка (приймаємо drop)
+    row.addEventListener('dragover', e => {
+      if (!dragId || dragId === id) return;
+      if (isInSubtree(id, dragId)) return; // не можна в нащадка
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+
+      // Позиція: верхня 30% = before, нижня 30% = after, середина = inside
+      const rect = row.getBoundingClientRect();
+      const relY  = e.clientY - rect.top;
+      const ratio = relY / rect.height;
+      let mode = 'inside';
+      if (!inTrash && !isSpecial) {
+        if (ratio < 0.28) mode = 'before';
+        else if (ratio > 0.72) mode = 'after';
+      }
+
+      if (dragOverRow !== row || dragOverMode !== mode) {
+        clearDragHighlight();
+        dragOverRow  = row;
+        dragOverMode = mode;
+        row.classList.add('drag-over-' + mode);
+      }
+
+      // Переміщаємо ghost
+      if (dragGhost) {
+        dragGhost.style.left = (e.clientX + 14) + 'px';
+        dragGhost.style.top  = (e.clientY - 10) + 'px';
+      }
+    });
+
+    row.addEventListener('dragleave', e => {
+      if (!row.contains(e.relatedTarget)) clearDragHighlight();
+    });
+
+    row.addEventListener('drop', e => {
+      e.preventDefault();
+      clearDragHighlight();
+      if (!dragId || dragId === id) return;
+
+      const srcPage = state.pages[dragId]; if (!srcPage) return;
+
+      // Якщо drop на Корзину — переміщаємо до корзини
+      if (id === TRASH_ID) {
+        moveToTrash(dragId);
+        expandState[TRASH_ID] = true;
+        renderTree();
+        return;
+      }
+
+      if (isInSubtree(id, dragId)) return;
+
+      if (dragOverMode === 'inside') {
+        movePage(dragId, id);
+        expandState[id] = true;
+      } else if (dragOverMode === 'before') {
+        movePage(dragId, state.pages[id].parentId, id);
+      } else {
+        // after: вставити після id
+        const par = state.pages[state.pages[id].parentId];
+        if (par) {
+          const kids = par.children;
+          const idx  = kids.indexOf(id);
+          const nextId = kids[idx + 1] || null;
+          movePage(dragId, par.id, nextId);
+        }
+      }
+      renderTree();
+    });
+
+    // ── Toggle ────────────────────────────────────────────────
     const toggle = document.createElement('span');
     toggle.className = 'tree-toggle';
     if (hasKids) {
@@ -596,14 +812,19 @@ function renderTree() {
       toggle.innerHTML = '<i class="tree-dot"></i>';
     }
 
-    // Icon → page actions popup
+    // ── Icon ──────────────────────────────────────────────────
     const icon = document.createElement('span');
     icon.className = 'tree-icon';
-    icon.title = 'Зберегти / Експортувати гілку';
-    icon.textContent = id === ROOT_ID ? '⌂' : '◻';
-    icon.addEventListener('click', e => { e.stopPropagation(); showPageActions(id, icon); });
+    if (inTrash) {
+      icon.textContent = '🗑';
+      icon.title = '';
+    } else {
+      icon.title = 'Зберегти / Експортувати гілку';
+      icon.textContent = id === ROOT_ID ? '⌂' : '◻';
+      icon.addEventListener('click', e => { e.stopPropagation(); showPageActions(id, icon); });
+    }
 
-    // Label
+    // ── Label ─────────────────────────────────────────────────
     const label = document.createElement('span');
     label.className = 'tree-label';
     label.textContent = page.title;
@@ -618,13 +839,53 @@ function renderTree() {
       item.appendChild(wrap);
     }
 
-    row.addEventListener('click', e => { if (e.target === toggle || e.target === icon) return; openPage(id); });
-    row.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e.clientX, e.clientY, id); });
+    row.addEventListener('click', e => {
+      if (e.target === toggle || e.target === icon) return;
+      openPage(id);
+    });
+
+    row.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      if (inTrash) showCtxMenuTrash(e.clientX, e.clientY, id);
+      else showCtxMenu(e.clientX, e.clientY, id);
+    });
+
     return item;
   }
 
-  const root = buildNode(ROOT_ID, 0);
-  if (root) treeEl.appendChild(root);
+  // ── Render main tree ──────────────────────────────────────
+  const rootNode = buildNode(ROOT_ID, 0, false);
+  if (rootNode) treeEl.appendChild(rootNode);
+
+  // ── Drop zone on main tree empty area → root ──────────────
+  treeEl.addEventListener('dragover', e => {
+    if (!dragId) return;
+    e.preventDefault();
+    if (dragGhost) {
+      dragGhost.style.left = (e.clientX + 14) + 'px';
+      dragGhost.style.top  = (e.clientY - 10) + 'px';
+    }
+  }, { passive: false });
+
+  // ── Render trash tree ─────────────────────────────────────
+  const trashPage = state.pages[TRASH_ID];
+  const trashKids = trashPage ? (trashPage.children || []) : [];
+  const trashOpen = trashDiv.classList.contains('open');
+
+  // Оновлюємо лічильник
+  const totalInTrash = trashKids.length;
+  const countEl = document.getElementById('trash-count');
+  if (countEl) {
+    countEl.textContent = totalInTrash;
+    countEl.classList.toggle('has-items', totalInTrash > 0);
+  }
+
+  if (trashOpen) {
+    trashKids.forEach(cid => {
+      const node = buildNode(cid, 0, true);
+      if (node) trashEl.appendChild(node);
+    });
+  }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -635,7 +896,14 @@ function applyLabels() {
   document.body.classList.toggle('labels-expanded', labelsExpanded);
   document.getElementById('btn-expand-labels')?.classList.toggle('active', labelsExpanded);
 }
-document.getElementById('btn-expand-labels').addEventListener('click', () => {
+// ── Корзина: розгортання/згортання ───────────────────────────
+document.getElementById('trash-divider').addEventListener('click', () => {
+  const div   = document.getElementById('trash-divider');
+  const tree  = document.getElementById('trash-tree');
+  const isOpen = div.classList.toggle('open');
+  tree.classList.toggle('hidden', !isOpen);
+  renderTree();
+});
   labelsExpanded = !labelsExpanded;
   localStorage.setItem(LS_LBL, labelsExpanded ? '1' : '0');
   applyLabels();
@@ -839,14 +1107,15 @@ function togglePreview() {
 }
 
 // ════════════════════════════════════════════════════════════
-//  CONTEXT MENU
+//  CONTEXT MENU — основне дерево
 // ════════════════════════════════════════════════════════════
 const ctxMenu = document.getElementById('ctx-menu');
 let ctxTargetId = null;
 
 function showCtxMenu(x, y, id) {
   ctxTargetId = id;
-  const isRoot = id === ROOT_ID;
+  document.getElementById('ctx-menu-trash').classList.add('hidden');
+  const isRoot = (id === ROOT_ID || id === TRASH_ID);
   ctxMenu.querySelector('[data-action="delete"]').style.display    = isRoot ? 'none' : '';
   ctxMenu.querySelector('[data-action="duplicate"]').style.display = isRoot ? 'none' : '';
   ctxMenu.querySelectorAll('hr').forEach(hr => hr.style.display = isRoot ? 'none' : '');
@@ -854,7 +1123,10 @@ function showCtxMenu(x, y, id) {
   ctxMenu.style.left = Math.min(x, window.innerWidth - 200) + 'px';
   ctxMenu.style.top  = Math.min(y, window.innerHeight - 180) + 'px';
 }
-document.addEventListener('click', e => { if (!ctxMenu.contains(e.target)) ctxMenu.classList.add('hidden'); });
+document.addEventListener('click', e => {
+  if (!ctxMenu.contains(e.target)) ctxMenu.classList.add('hidden');
+  if (!ctxMenuTrash.contains(e.target)) ctxMenuTrash.classList.add('hidden');
+});
 
 ctxMenu.addEventListener('click', e => {
   const btn = e.target.closest('button'); if (!btn) return;
@@ -864,7 +1136,7 @@ ctxMenu.addEventListener('click', e => {
     startInlineRename(id);
   } else if (action === 'add-child') {
     const child = createPage(id);
-    expandState[id] = true;   // expand parent
+    expandState[id] = true;
     renderTree();
     openPage(child.id);
     setTimeout(() => startInlineRename(child.id), 120);
@@ -872,10 +1144,47 @@ ctxMenu.addEventListener('click', e => {
     const np = duplicatePage(id);
     if (np) { expandState[np.parentId] = true; renderTree(); openPage(np.id); }
   } else if (action === 'delete') {
-    showModal(`Видалити "${state.pages[id]?.title}" та всі підсторінки?`, () => {
-      const wasActive = isInSubtree(state.activeId, id);
-      deletePage(id);
-      if (wasActive) { state.activeId = null; document.getElementById('editor-wrap').classList.add('hidden'); document.getElementById('empty-state').classList.remove('hidden'); }
+    moveToTrash(id);
+    const wasActive = state.activeId === id || isInSubtree(state.activeId, id);
+    if (wasActive) {
+      state.activeId = null;
+      document.getElementById('editor-wrap').classList.add('hidden');
+      document.getElementById('empty-state').classList.remove('hidden');
+    }
+    expandState[TRASH_ID] = true;
+    renderTree();
+  }
+});
+
+// ════════════════════════════════════════════════════════════
+//  CONTEXT MENU — Корзина
+// ════════════════════════════════════════════════════════════
+const ctxMenuTrash = document.getElementById('ctx-menu-trash');
+let ctxTrashTargetId = null;
+
+function showCtxMenuTrash(x, y, id) {
+  ctxTrashTargetId = id;
+  ctxMenu.classList.add('hidden');
+  ctxMenuTrash.classList.remove('hidden');
+  ctxMenuTrash.style.left = Math.min(x, window.innerWidth - 200) + 'px';
+  ctxMenuTrash.style.top  = Math.min(y, window.innerHeight - 120) + 'px';
+}
+
+ctxMenuTrash.addEventListener('click', e => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  const action = btn.dataset.action, id = ctxTrashTargetId;
+  ctxMenuTrash.classList.add('hidden');
+  if (action === 'restore') {
+    restorePage(id);
+    renderTree();
+  } else if (action === 'delete-forever') {
+    showModal(`Остаточно видалити «${state.pages[id]?.title}» та всі підсторінки? Це незворотньо.`, () => {
+      if (state.activeId === id || isInSubtree(state.activeId, id)) {
+        state.activeId = null;
+        document.getElementById('editor-wrap').classList.add('hidden');
+        document.getElementById('empty-state').classList.remove('hidden');
+      }
+      permanentlyDeletePage(id);
       renderTree();
     });
   }
@@ -1005,13 +1314,24 @@ document.getElementById('btn-save').addEventListener('click', () => {
 });
 
 document.getElementById('btn-delete-page').addEventListener('click', () => {
-  const id = state.activeId; if (!id || id === ROOT_ID) return;
-  showModal(`Видалити "${state.pages[id]?.title}"?`, () => {
-    deletePage(id); state.activeId = null;
+  const id = state.activeId; if (!id || id === ROOT_ID || id === TRASH_ID) return;
+  if (isInSubtree(id, TRASH_ID)) {
+    // Вже в корзині — пропонуємо остаточне видалення
+    showModal(`Остаточно видалити «${state.pages[id]?.title}»? Це незворотньо.`, () => {
+      permanentlyDeletePage(id);
+      state.activeId = null;
+      document.getElementById('editor-wrap').classList.add('hidden');
+      document.getElementById('empty-state').classList.remove('hidden');
+      renderTree();
+    });
+  } else {
+    moveToTrash(id);
+    state.activeId = null;
     document.getElementById('editor-wrap').classList.add('hidden');
     document.getElementById('empty-state').classList.remove('hidden');
+    expandState[TRASH_ID] = true;
     renderTree();
-  });
+  }
 });
 
 document.getElementById('btn-preview').addEventListener('click', togglePreview);

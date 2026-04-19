@@ -71,6 +71,13 @@
         <input id="search-input" type="text" placeholder="Пошук..." autocomplete="off">
       </div>
       <div id="tree-root" class="tree"></div>
+      <div id="trash-divider">
+        <span class="trash-icon">🗑</span>
+        <span>Корзина</span>
+        <span class="trash-arrow">&#9654;</span>
+        <span id="trash-count">0</span>
+      </div>
+      <div id="trash-tree" class="tree hidden"></div>
       <div id="sidebar-resizer"></div>
     </aside>
 
@@ -122,7 +129,13 @@
   <button data-action="add-child">Додати підсторінку</button>
   <button data-action="duplicate">Дублювати</button>
   <hr>
-  <button data-action="delete" class="danger">Видалити</button>
+  <button data-action="delete" class="danger">До корзини</button>
+</div>
+
+<div id="ctx-menu-trash" class="ctx-menu hidden">
+  <button data-action="restore">♻ Відновити</button>
+  <hr>
+  <button data-action="delete-forever" class="danger">✕ Видалити назавжди</button>
 </div>
 
 <div id="modal-overlay" class="hidden">
