@@ -8,6 +8,7 @@ const LS_KEY  = 'arkhiv_v3';
 const LS_SW   = 'arkhiv-sidebar-w';
 const LS_SO   = 'arkhiv-sidebar-open';
 const LS_LBL  = 'arkhiv-labels';
+const LS_EXP  = 'arkhiv-expand';
 
 // ── Firebase config ─────────────────────────────────────────
 const FB_CONFIG = {
@@ -24,7 +25,12 @@ let state        = { pages: {}, activeId: null };
 let unsaved      = false;
 let activeFormat = 'plain';
 let previewActive = false;
-const expandState = {};
+let expandState = {};
+try { const _es = localStorage.getItem(LS_EXP); if (_es) expandState = JSON.parse(_es); } catch(e) {}
+
+function saveExpandState() {
+  try { localStorage.setItem(LS_EXP, JSON.stringify(expandState)); } catch(e) {}
+}
 
 // ── Firebase handles ────────────────────────────────────────
 let db         = null;
@@ -478,7 +484,7 @@ function rebuildChildrenFromParentId() {
 function createPage(parentId) {
   const id = uid();
   const now = Date.now();
-  const page = { id, title: 'Без назви', content: '', format: 'auto', parentId, children: [], createdAt: now, updatedAt: now };
+  const page = { id, title: 'Без назви', content: '', format: 'plain', parentId, children: [], createdAt: now, updatedAt: now };
   state.pages[id] = page;
   const parent = state.pages[parentId];
   if (parent) {
@@ -565,7 +571,7 @@ function detectFormat(text) {
   if ((text.match(/<[a-z][a-z0-9]*[\s>]/gi) || []).length > 3) return 'rich';
   return md >= 4 ? 'markdown' : 'plain';
 }
-function resolveFormat(page) { return page.format !== 'auto' ? page.format : detectFormat(page.content); }
+function resolveFormat(page) { return (page.format && page.format !== 'auto') ? page.format : 'plain'; }
 
 // ════════════════════════════════════════════════════════════
 //  TREE HELPERS
@@ -595,21 +601,36 @@ function updateBreadcrumb(id) {
 let dragId = null;
 let dragOverId = null;
 
-function movePage(id, newParentId) {
+// Move page to new parent at specific index position
+function movePageTo(id, newParentId, insertBefore) {
   if (!id || !newParentId) return;
   if (id === ROOT_ID || id === TRASH_ID) return;
   if (id === newParentId) return;
-  if (isInSubtree(newParentId, id)) return; // can't move into own child
+  if (isInSubtree(newParentId, id)) return;
   const page = state.pages[id]; if (!page) return;
   const oldParent = state.pages[page.parentId];
   if (oldParent) oldParent.children = oldParent.children.filter(c => c !== id);
   page.parentId = newParentId;
   const newParent = state.pages[newParentId];
-  if (newParent && !newParent.children.includes(id)) newParent.children.push(id);
+  if (newParent) {
+    if (!Array.isArray(newParent.children)) newParent.children = [];
+    newParent.children = newParent.children.filter(c => c !== id);
+    if (insertBefore && newParent.children.includes(insertBefore)) {
+      const idx = newParent.children.indexOf(insertBefore);
+      newParent.children.splice(idx, 0, id);
+    } else {
+      newParent.children.push(id);
+    }
+  }
   page.updatedAt = Date.now();
   expandState[newParentId] = true;
+  saveExpandState();
   saveState(); fbQueueWrite(page); flushWriteQueue();
   renderTree();
+}
+
+function movePage(id, newParentId) {
+  movePageTo(id, newParentId, null);
 }
 
 // ════════════════════════════════════════════════════════════
@@ -620,13 +641,25 @@ function renderTree() {
   treeEl.innerHTML = '';
   const q = document.getElementById('search-input').value.trim().toLowerCase();
 
+  // Active drop indicator line element
+  let dropIndicator = null;
+  function getOrCreateIndicator() {
+    if (!dropIndicator) {
+      dropIndicator = document.createElement('div');
+      dropIndicator.className = 'drag-drop-indicator';
+    }
+    return dropIndicator;
+  }
+  function removeIndicator() {
+    if (dropIndicator && dropIndicator.parentNode) dropIndicator.parentNode.removeChild(dropIndicator);
+  }
+
   function attachDragEvents(row, id) {
     if (id === ROOT_ID || id === TRASH_ID) {
-      // roots can be drop targets but not draggable
       row.addEventListener('dragover', e => { e.preventDefault(); row.classList.add('drag-over'); });
       row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
       row.addEventListener('drop', e => {
-        e.preventDefault(); row.classList.remove('drag-over');
+        e.preventDefault(); row.classList.remove('drag-over'); removeIndicator();
         if (dragId && dragId !== id) movePage(dragId, id);
         dragId = null;
       });
@@ -638,12 +671,57 @@ function renderTree() {
       e.dataTransfer.effectAllowed = 'move';
       row.classList.add('dragging');
     });
-    row.addEventListener('dragend', () => { dragId = null; row.classList.remove('dragging'); document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over')); });
-    row.addEventListener('dragover', e => { e.preventDefault(); if (dragId && dragId !== id) row.classList.add('drag-over'); });
-    row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+    row.addEventListener('dragend', () => {
+      dragId = null; row.classList.remove('dragging');
+      document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+      removeIndicator();
+    });
+    row.addEventListener('dragover', e => {
+      if (!dragId || dragId === id || isInSubtree(id, dragId)) return;
+      e.preventDefault();
+      const rect = row.getBoundingClientRect();
+      const midY = rect.top + rect.height / 2;
+      const ind = getOrCreateIndicator();
+      document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+      if (e.clientY < midY) {
+        // Drop BEFORE this row — show line above
+        row.parentNode.insertBefore(ind, row);
+        ind.dataset.targetId = id;
+        ind.dataset.position = 'before';
+      } else {
+        // Drop INTO as child (bottom half) or after (if near bottom)
+        const intoZone = e.clientY > rect.top + rect.height * 0.65;
+        if (intoZone) {
+          row.classList.add('drag-over');
+          removeIndicator();
+          ind.dataset.targetId = id;
+          ind.dataset.position = 'into';
+        } else {
+          row.parentNode.insertBefore(ind, row);
+          ind.dataset.targetId = id;
+          ind.dataset.position = 'before';
+        }
+      }
+    });
+    row.addEventListener('dragleave', e => {
+      if (!row.contains(e.relatedTarget)) {
+        row.classList.remove('drag-over');
+      }
+    });
     row.addEventListener('drop', e => {
-      e.preventDefault(); row.classList.remove('drag-over');
-      if (dragId && dragId !== id && !isInSubtree(id, dragId)) movePage(dragId, id);
+      e.preventDefault();
+      row.classList.remove('drag-over');
+      const ind = dropIndicator;
+      if (!dragId || dragId === id) { removeIndicator(); dragId = null; return; }
+      const pos = ind ? ind.dataset.position : 'into';
+      const targetId = ind ? ind.dataset.targetId : id;
+      removeIndicator();
+      if (pos === 'before') {
+        const targetPage = state.pages[targetId];
+        if (targetPage) movePageTo(dragId, targetPage.parentId, targetId);
+      } else {
+        if (!isInSubtree(id, dragId)) movePage(dragId, id);
+      }
       dragId = null;
     });
   }
@@ -674,6 +752,7 @@ function renderTree() {
       toggle.addEventListener('click', e => {
         e.stopPropagation();
         expandState[id] = expandState[id] === false ? true : false;
+        saveExpandState();
         renderTree();
       });
     } else {
@@ -861,7 +940,7 @@ function openPage(id) {
   document.getElementById('empty-state').classList.add('hidden');
   document.getElementById('editor-wrap').classList.remove('hidden');
   document.getElementById('page-title').value = page.title;
-  document.getElementById('format-select').value = page.format || 'auto';
+  document.getElementById('format-select').value = (page.format && page.format !== 'auto') ? page.format : 'plain';
   updateBreadcrumb(id);
 
   previewActive = false;
@@ -879,7 +958,7 @@ function openPage(id) {
 function reloadEditorContent(page) {
   const fmt = resolveFormat(page);
   activeFormat = fmt;
-  document.getElementById('format-select').value = page.format || 'auto';
+  document.getElementById('format-select').value = (page.format && page.format !== 'auto') ? page.format : 'plain';
   applyEditorFormat(fmt, page.content || '');
   updateStatusFormat(fmt);
   updateWordCount();
@@ -1405,7 +1484,7 @@ const sidebarPref = localStorage.getItem(LS_SO);
 setSidebarOpen(window.innerWidth > 700 ? sidebarPref !== '0' : false);
 
 applyLabels();
-if (expandState[ROOT_ID] === undefined) expandState[ROOT_ID] = true;
+if (expandState[ROOT_ID] === undefined) { expandState[ROOT_ID] = true; saveExpandState(); }
 
 // Render local data immediately (works offline)
 renderTree();
