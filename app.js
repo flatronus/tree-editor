@@ -893,44 +893,61 @@ function pageToHtml(page) {
 }
 
 function exportBranchPDF(id) {
-  // Завжди зберігаємо поточний стан редактора перед експортом
+  // Зберігаємо поточний стан редактора перед експортом
   if (state.activeId) saveCurrentEditorToPage(false);
 
   const pages = collectSubtree(id);
-  const styles = `<style>
+
+  // Діагностика — виводимо у консоль
+  console.log('[PDF] pages:', pages.map(p => ({ id: p.id, title: p.title, fmt: p.format, len: (p.content||'').length })));
+
+  const styles = `
     *{box-sizing:border-box}
-    body{font-family:Georgia,serif;color:#111;font-size:11pt;line-height:1.75;margin:0;padding:10mm 14mm}
+    body{font-family:Georgia,serif;color:#111;font-size:11pt;line-height:1.75;margin:0;padding:14mm 16mm}
     h1{font-size:15pt;font-weight:500;color:#1a1a2e;margin:14pt 0 3pt;border-bottom:1pt solid #4A90D9;padding-bottom:3pt}
-    h2{font-size:13pt;color:#2563a8;margin:11pt 0 3pt} h3{font-size:11pt;color:#4a5568;margin:8pt 0 2pt}
-    p{margin:4pt 0}ul,ol{padding-left:16pt;margin:4pt 0}
+    h2{font-size:13pt;color:#2563a8;margin:11pt 0 3pt}
+    h3{font-size:11pt;color:#4a5568;margin:8pt 0 2pt}
+    p{margin:4pt 0}
+    ul,ol{padding-left:16pt;margin:4pt 0}
     pre{background:#f5f7fa;border:0.5pt solid #e2e8f0;padding:6pt 9pt;white-space:pre-wrap;font-size:9pt;font-family:monospace}
     code{background:#f0f2f5;padding:1pt 3pt;font-family:monospace;font-size:9pt;color:#c7254e}
     blockquote{border-left:2pt solid #4A90D9;margin:6pt 0;padding-left:9pt;color:#4a5568;font-style:italic}
-    table{width:100%;border-collapse:collapse;margin:6pt 0}th{background:#eef2f8;border:0.5pt solid #cbd5e1;padding:3pt 6pt;font-weight:500}td{border:0.5pt solid #e2e8f0;padding:3pt 6pt}
+    table{width:100%;border-collapse:collapse;margin:6pt 0}
+    th{background:#eef2f8;border:0.5pt solid #cbd5e1;padding:3pt 6pt;font-weight:500}
+    td{border:0.5pt solid #e2e8f0;padding:3pt 6pt}
     hr{border:none;border-top:0.5pt solid #e2e8f0;margin:10pt 0 7pt}
     .crumb{font-size:8pt;color:#94a3b8;margin-bottom:1pt;font-family:monospace}
-  </style>`;
+  `;
+
   let body = '';
   pages.forEach((page, i) => {
+    const fmt = page.format && page.format !== 'auto' ? page.format : 'plain';
+    let content = '';
+    if (fmt === 'markdown' && typeof marked !== 'undefined') {
+      content = marked.parse(page.content || '');
+    } else if (fmt === 'rich') {
+      content = page.content || '';
+    } else {
+      // plain — зберігаємо пробіли і переноси рядків
+      content = '<div style="white-space:pre-wrap;font-family:monospace;font-size:10pt">' +
+        (page.content || '').replace(/&/g, '&amp;').replace(/</g, '&lt;') +
+        '</div>';
+    }
     body += (i > 0 ? '<hr>' : '') +
-      `<div class="crumb">${getBreadcrumb(page.id)}</div><h1>${page.title}</h1>` +
-      pageToHtml(page);
+      `<div class="crumb">${getBreadcrumb(page.id)}</div>` +
+      `<h1>${page.title}</h1>` +
+      content;
   });
 
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">${styles}</head><body>${body}</body></html>`;
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${state.pages[id]?.title || 'export'}</title><style>${styles}</style></head><body>${body}</body></html>`;
 
-  // Використовуємо iframe + print — векторний текст, без canvas
-  const iframe = document.createElement('iframe');
-  iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:210mm;height:297mm;border:none;visibility:hidden';
-  document.body.appendChild(iframe);
-  iframe.contentDocument.open();
-  iframe.contentDocument.write(html);
-  iframe.contentDocument.close();
-  iframe.contentWindow.focus();
-  setTimeout(() => {
-    iframe.contentWindow.print();
-    setTimeout(() => document.body.removeChild(iframe), 2000);
-  }, 600);
+  const w = window.open('', '_blank');
+  if (!w) { alert('Дозвольте спливаючі вікна для цього сайту, щоб відкрити PDF.'); return; }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  setTimeout(() => { w.print(); }, 800);
 }
 
 function exportBranchTXT(id) {
