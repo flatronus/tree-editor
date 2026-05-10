@@ -898,15 +898,12 @@ function exportBranchPDF(id) {
 
   const pages = collectSubtree(id);
 
-  // Діагностика — виводимо у консоль
-  console.log('[PDF] pages:', pages.map(p => ({ id: p.id, title: p.title, fmt: p.format, len: (p.content||'').length })));
-
   const styles = `
     *{box-sizing:border-box}
-    body{font-family:Georgia,serif;color:#111;font-size:11pt;line-height:1.75;margin:0;padding:14mm 16mm}
-    h1{font-size:15pt;font-weight:500;color:#1a1a2e;margin:14pt 0 3pt;border-bottom:1pt solid #4A90D9;padding-bottom:3pt}
-    h2{font-size:13pt;color:#2563a8;margin:11pt 0 3pt}
-    h3{font-size:11pt;color:#4a5568;margin:8pt 0 2pt}
+    body,div{font-family:Georgia,serif;color:#111;font-size:11pt;line-height:1.75}
+    h1{font-size:15pt;font-weight:500;color:#1a1a2e;margin:14pt 0 3pt;border-bottom:1pt solid #4A90D9;padding-bottom:3pt;page-break-after:avoid}
+    h2{font-size:13pt;color:#2563a8;margin:11pt 0 3pt;page-break-after:avoid}
+    h3{font-size:11pt;color:#4a5568;margin:8pt 0 2pt;page-break-after:avoid}
     p{margin:4pt 0}
     ul,ol{padding-left:16pt;margin:4pt 0}
     pre{background:#f5f7fa;border:0.5pt solid #e2e8f0;padding:6pt 9pt;white-space:pre-wrap;font-size:9pt;font-family:monospace}
@@ -917,6 +914,7 @@ function exportBranchPDF(id) {
     td{border:0.5pt solid #e2e8f0;padding:3pt 6pt}
     hr{border:none;border-top:0.5pt solid #e2e8f0;margin:10pt 0 7pt}
     .crumb{font-size:8pt;color:#94a3b8;margin-bottom:1pt;font-family:monospace}
+    .plain-text{white-space:pre-wrap;font-family:monospace;font-size:10pt;line-height:1.6}
   `;
 
   let body = '';
@@ -928,8 +926,7 @@ function exportBranchPDF(id) {
     } else if (fmt === 'rich') {
       content = page.content || '';
     } else {
-      // plain — зберігаємо пробіли і переноси рядків
-      content = '<div style="white-space:pre-wrap;font-family:monospace;font-size:10pt">' +
+      content = '<div class="plain-text">' +
         (page.content || '').replace(/&/g, '&amp;').replace(/</g, '&lt;') +
         '</div>';
     }
@@ -939,15 +936,25 @@ function exportBranchPDF(id) {
       content;
   });
 
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${state.pages[id]?.title || 'export'}</title><style>${styles}</style></head><body>${body}</body></html>`;
+  // Елемент МУСИТЬ бути в DOM — інакше html2canvas рендерить пусто
+  const el = document.createElement('div');
+  el.style.cssText = 'position:fixed;left:-9999px;top:0;width:180mm;background:#fff;padding:0;';
+  el.innerHTML = `<style>${styles}</style><div style="padding:12mm 14mm">${body}</div>`;
+  document.body.appendChild(el);
 
-  const w = window.open('', '_blank');
-  if (!w) { alert('Дозвольте спливаючі вікна для цього сайту, щоб відкрити PDF.'); return; }
-  w.document.open();
-  w.document.write(html);
-  w.document.close();
-  w.focus();
-  setTimeout(() => { w.print(); }, 800);
+  const filename = (state.pages[id]?.title || 'export').replace(/[/\\?%*:|"<>]/g, '-') + '.pdf';
+
+  html2pdf()
+    .set({
+      margin: 0,
+      filename,
+      html2canvas: { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff' },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      pagebreak: { mode: ['css', 'legacy'] }
+    })
+    .from(el)
+    .save()
+    .finally(() => { document.body.removeChild(el); });
 }
 
 function exportBranchTXT(id) {
