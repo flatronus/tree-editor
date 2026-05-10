@@ -896,9 +896,10 @@ function pageToHtml(page) {
 function exportBranchPDF(id) {
   const pages = collectSubtree(id);
   const styles = `<style>
-    body{font-family:Georgia,serif;color:#111;font-size:11pt;line-height:1.75;margin:0;padding:0}
+    *{box-sizing:border-box}
+    body{font-family:Georgia,serif;color:#111;font-size:11pt;line-height:1.75;margin:0;padding:10mm 14mm}
     h1{font-size:15pt;font-weight:500;color:#1a1a2e;margin:14pt 0 3pt;border-bottom:1pt solid #4A90D9;padding-bottom:3pt}
-    h2{font-size:13pt;color:#2563a8;margin:11pt 0 3pt} h3{font-size:11pt;color:#4a5568;margin:8pt 0 2pt}
+    h2{font-size:13pt;color:#2563a8;margin:11pt 0 3pt}h3{font-size:11pt;color:#4a5568;margin:8pt 0 2pt}
     p{margin:4pt 0}ul,ol{padding-left:16pt;margin:4pt 0}
     pre{background:#f5f7fa;border:0.5pt solid #e2e8f0;padding:6pt 9pt;white-space:pre-wrap;font-size:9pt;font-family:monospace}
     code{background:#f0f2f5;padding:1pt 3pt;font-family:monospace;font-size:9pt;color:#c7254e}
@@ -906,21 +907,40 @@ function exportBranchPDF(id) {
     table{width:100%;border-collapse:collapse;margin:6pt 0}th{background:#eef2f8;border:0.5pt solid #cbd5e1;padding:3pt 6pt;font-weight:500}td{border:0.5pt solid #e2e8f0;padding:3pt 6pt}
     hr{border:none;border-top:0.5pt solid #e2e8f0;margin:10pt 0 7pt}
     .crumb{font-size:8pt;color:#94a3b8;margin-bottom:1pt;font-family:monospace}
+    @media print{body{margin:0;padding:10mm 14mm}@page{margin:10mm 14mm}}
   </style>`;
   let body = '';
   pages.forEach((page, i) => {
-    body += (i > 0 ? '<hr>' : '') + `<div class="crumb">${getBreadcrumb(page.id)}</div><h1>${page.title}</h1>` + pageToHtml(page);
+    body += (i > 0 ? '<hr>' : '') +
+      `<div class="crumb">${getBreadcrumb(page.id)}</div><h1>${(page.title||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</h1>` +
+      pageToHtml(page);
   });
-  const el = document.createElement('div');
-  el.style.cssText = 'padding:10mm 12mm;background:#fff';
-  el.innerHTML = styles + body;
-  if (typeof html2pdf !== 'undefined') {
-    html2pdf().set({ margin:[10,12,10,12], filename:(state.pages[id]?.title||'export')+'.pdf', html2canvas:{scale:2,useCORS:true}, jsPDF:{unit:'mm',format:'a4'}, pagebreak:{mode:['avoid-all','css']} }).from(el).save();
-  } else {
-    const w = window.open('', '_blank');
-    w.document.write('<!DOCTYPE html><html><body>' + el.innerHTML + '</body></html>');
-    w.document.close(); setTimeout(() => w.print(), 700);
-  }
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">${styles}</head><body>${body}</body></html>`;
+
+  // Create a hidden iframe, write content into it, then trigger print
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:210mm;height:297mm;border:none;visibility:hidden';
+  document.body.appendChild(iframe);
+  const iDoc = iframe.contentDocument || iframe.contentWindow.document;
+  iDoc.open();
+  iDoc.write(html);
+  iDoc.close();
+  // Wait for fonts/images to settle, then print
+  iframe.onload = () => {
+    setTimeout(() => {
+      try { iframe.contentWindow.focus(); iframe.contentWindow.print(); }
+      catch(e) { console.warn('PDF print error', e); }
+      setTimeout(() => document.body.removeChild(iframe), 2000);
+    }, 400);
+  };
+  // Fallback if onload already fired
+  setTimeout(() => {
+    if (iframe.parentNode) {
+      try { iframe.contentWindow.focus(); iframe.contentWindow.print(); }
+      catch(e) {}
+      setTimeout(() => { if (iframe.parentNode) document.body.removeChild(iframe); }, 2000);
+    }
+  }, 1500);
 }
 
 function exportBranchTXT(id) {
