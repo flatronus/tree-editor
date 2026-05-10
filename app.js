@@ -484,7 +484,7 @@ function rebuildChildrenFromParentId() {
 function createPage(parentId) {
   const id = uid();
   const now = Date.now();
-  const page = { id, title: 'Новий', content: '', format: 'plain', parentId, children: [], createdAt: now, updatedAt: now };
+  const page = { id, title: 'Без назви', content: '', format: 'plain', parentId, children: [], createdAt: now, updatedAt: now };
   state.pages[id] = page;
   const parent = state.pages[parentId];
   if (parent) {
@@ -813,11 +813,7 @@ function renderTree() {
     }
 
     if (!isTrashRoot) {
-      row.addEventListener('click', e => {
-        if (e.target === toggle || e.target === icon || e.target.classList.contains('trash-empty-btn')) return;
-        openPage(id);
-        if (window.innerWidth <= 1024) setSidebarOpen(false);
-      });
+      row.addEventListener('click', e => { if (e.target === toggle || e.target === icon || e.target.classList.contains('trash-empty-btn')) return; openPage(id); });
     }
     row.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e.clientX, e.clientY, id); });
     return item;
@@ -948,13 +944,12 @@ function openPage(id) {
   updateBreadcrumb(id);
 
   previewActive = false;
-  const previewIco = document.querySelector('#btn-preview .btn-icon');
-  if (previewIco) previewIco.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+  document.getElementById('btn-preview').querySelector('.btn-icon').textContent = '▶';
+  document.querySelector('#btn-preview .btn-label').textContent = ' Перегляд';
 
   activeFormat = resolveFormat(page);
   applyEditorFormat(activeFormat, page.content || '');
   updateStatusFormat(activeFormat);
-  updateFormatToggleBtn();
   updateWordCount();
   setUnsaved(false);
   renderTree();
@@ -966,7 +961,6 @@ function reloadEditorContent(page) {
   document.getElementById('format-select').value = (page.format && page.format !== 'auto') ? page.format : 'plain';
   applyEditorFormat(fmt, page.content || '');
   updateStatusFormat(fmt);
-  updateFormatToggleBtn();
   updateWordCount();
   updateBreadcrumb(page.id);
 }
@@ -988,7 +982,7 @@ function getEditorContent() {
 function saveCurrentEditorToPage(flushRemote = false) {
   const id = state.activeId; if (!id || !state.pages[id]) return;
   const page = state.pages[id];
-  page.title   = document.getElementById('page-title').value.trim() || 'Новий';
+  page.title   = document.getElementById('page-title').value.trim() || 'Без назви';
   page.format  = document.getElementById('format-select').value;
   page.content = getEditorContent();
   page.updatedAt = Date.now();
@@ -1028,6 +1022,7 @@ function togglePreview() {
   const plain = document.getElementById('editor-plain');
   const rich  = document.getElementById('editor-rich');
   const prev  = document.getElementById('editor-preview');
+  const lbl   = document.querySelector('#btn-preview .btn-label');
   const ico   = document.querySelector('#btn-preview .btn-icon');
   if (!previewActive) {
     let html = '';
@@ -1037,12 +1032,12 @@ function togglePreview() {
     else html = '<pre style="white-space:pre-wrap">' + c.replace(/</g,'&lt;') + '</pre>';
     prev.innerHTML = html;
     plain.classList.add('hidden'); rich.classList.add('hidden'); prev.classList.remove('hidden');
-    if (ico) ico.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+    if (ico) ico.textContent = '✕'; if (lbl) lbl.textContent = ' Редагувати';
     previewActive = true;
   } else {
     prev.classList.add('hidden');
     applyEditorFormat(activeFormat, getEditorContent());
-    if (ico) ico.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+    if (ico) ico.textContent = '▶'; if (lbl) lbl.textContent = ' Перегляд';
     previewActive = false;
   }
 }
@@ -1129,7 +1124,7 @@ function startInlineRename(id) {
     label.textContent = ''; label.appendChild(inp);
     inp.focus(); inp.select();
     const commit = () => {
-      const val = inp.value.trim() || 'Новий';
+      const val = inp.value.trim() || 'Без назви';
       if (state.pages[id]) {
         state.pages[id].title = val; state.pages[id].updatedAt = Date.now();
         if (state.activeId === id) { document.getElementById('page-title').value = val; updateBreadcrumb(id); }
@@ -1158,7 +1153,7 @@ function showModal(text, onConfirm) {
 // ════════════════════════════════════════════════════════════
 function setSidebarOpen(open) {
   const sb = document.getElementById('sidebar');
-  const isMobile = window.innerWidth <= 1024;
+  const isMobile = window.innerWidth <= 700;
   if (isMobile) { sb.style.top = document.getElementById('global-topbar').offsetHeight + 'px'; sb.classList.toggle('mobile-open', open); sb.classList.remove('collapsed'); }
   else { sb.classList.toggle('collapsed', !open); }
   localStorage.setItem(LS_SO, open ? '1' : '0');
@@ -1167,12 +1162,12 @@ function setSidebarOpen(open) {
 }
 function toggleSidebar() {
   const sb = document.getElementById('sidebar');
-  const isMobile = window.innerWidth <= 1024;
+  const isMobile = window.innerWidth <= 700;
   const isOpen = isMobile ? sb.classList.contains('mobile-open') : !sb.classList.contains('collapsed');
   setSidebarOpen(!isOpen);
 }
 document.getElementById('btn-toggle-sidebar').addEventListener('click', toggleSidebar);
-document.getElementById('editor-area').addEventListener('click', () => { if (window.innerWidth <= 1024) setSidebarOpen(false); });
+document.getElementById('editor-area').addEventListener('click', () => { if (window.innerWidth <= 700) setSidebarOpen(false); });
 
 // Resize handle
 (function () {
@@ -1226,41 +1221,13 @@ document.getElementById('format-bar').addEventListener('click', e => {
   document.getElementById('editor-rich').focus(); unsaved = true;
 });
 
-// Format toggle button (markdown ↔ rich)
-function updateFormatToggleBtn() {
-  const btn = document.getElementById('btn-format-toggle');
-  if (!btn) return;
-  const fmt = activeFormat === 'rich' ? 'rich' : 'markdown';
-  // Show current mode visually
-  btn.title = fmt === 'rich' ? 'Зараз: Форматований — натисни для Markdown' : 'Зараз: Markdown — натисни для Форматованого';
-  btn.dataset.fmt = fmt;
-  btn.innerHTML = fmt === 'rich'
-    ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>'
-    : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>';
-}
-
-document.getElementById('btn-format-toggle')?.addEventListener('click', () => {
-  if (!state.activeId) return;
-  const content = getEditorContent();
-  const currentFmt = activeFormat;
-  const newFmt = currentFmt === 'rich' ? 'markdown' : 'rich';
-  state.pages[state.activeId].format = newFmt;
-  activeFormat = newFmt;
-  previewActive = false;
-  applyEditorFormat(activeFormat, content);
-  updateStatusFormat(activeFormat);
-  updateFormatToggleBtn();
-  unsaved = true;
-});
-
-document.getElementById('format-select')?.addEventListener('change', e => {
+document.getElementById('format-select').addEventListener('change', e => {
   if (!state.activeId) return;
   const fmt = e.target.value, content = getEditorContent();
   state.pages[state.activeId].format = fmt;
   activeFormat = fmt === 'auto' ? detectFormat(content) : fmt;
   previewActive = false;
   applyEditorFormat(activeFormat, content); updateStatusFormat(activeFormat); unsaved = true;
-  updateFormatToggleBtn();
 });
 
 document.getElementById('btn-save').addEventListener('click', () => {
@@ -1308,7 +1275,7 @@ document.getElementById('btn-new-page').addEventListener('click', () => {
 document.getElementById('btn-create-first').addEventListener('click', () => document.getElementById('btn-new-page').click());
 
 document.getElementById('page-title').addEventListener('input', e => {
-  if (state.activeId && state.pages[state.activeId]) { state.pages[state.activeId].title = e.target.value || 'Новий'; updateBreadcrumb(state.activeId); renderTree(); }
+  if (state.activeId && state.pages[state.activeId]) { state.pages[state.activeId].title = e.target.value || 'Без назви'; updateBreadcrumb(state.activeId); renderTree(); }
   unsaved = true; setSyncStatus('pending');
 });
 document.getElementById('editor-plain').addEventListener('input', () => { unsaved = true; setSyncStatus('pending'); updateWordCount(); if (state.pages[state.activeId]?.format === 'auto') updateStatusFormat(detectFormat(document.getElementById('editor-plain').value)); });
@@ -1510,11 +1477,11 @@ loadState();
 ensureRoot();
 
 const savedW = localStorage.getItem(LS_SW);
-if (savedW && window.innerWidth > 1024) document.getElementById('sidebar').style.width = savedW + 'px';
+if (savedW && window.innerWidth > 700) document.getElementById('sidebar').style.width = savedW + 'px';
 
 // Sidebar defaults: open on desktop, closed on mobile
 const sidebarPref = localStorage.getItem(LS_SO);
-setSidebarOpen(window.innerWidth > 1024 ? sidebarPref !== '0' : false);
+setSidebarOpen(window.innerWidth > 700 ? sidebarPref !== '0' : false);
 
 applyLabels();
 if (expandState[ROOT_ID] === undefined) { expandState[ROOT_ID] = true; saveExpandState(); }
