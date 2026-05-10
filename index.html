@@ -51,17 +51,38 @@
       <span id="user-email-badge"></span>
     </div>
     <div class="topbar-right">
-      <select id="format-select" title="Формат">
+      <!-- Format toggle: markdown ↔ rich (hidden select kept for JS compat) -->
+      <select id="format-select" title="Формат" style="display:none">
         <option value="plain">Текст</option>
         <option value="markdown">Markdown</option>
         <option value="rich">Форматований</option>
       </select>
-      <button id="btn-preview"    class="action-btn" title="Перегляд"><span class="btn-icon">&#9654;</span><span class="btn-label">&nbsp;Перегляд</span></button>
-      <button id="btn-emoji"      class="action-btn" title="Вставити іконку / емодзі"><span class="btn-icon">☺</span><span class="btn-label">&nbsp;Іконки</span></button>
-      <button id="btn-import"     class="action-btn" title="Імпорт файлу"><span class="btn-icon">&#8681;</span><span class="btn-label">&nbsp;Імпорт</span></button>
-      <button id="btn-export-pdf" class="action-btn" title="Експорт PDF"><span class="btn-label">PDF</span></button>
-      <button id="btn-save"       class="action-btn primary" title="Зберегти і синхронізувати (Ctrl+S)"><span class="btn-icon">&#128190;</span><span class="btn-label">&nbsp;Зберегти</span></button>
-      <button id="btn-logout"     class="action-btn" title="Вийти">&#8594;&nbsp;Вийти</button>
+      <button id="btn-format-toggle" class="action-btn icon-only" title="Перемкнути формат (Markdown / Форматований)" data-fmt="markdown">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+      </button>
+      <button id="btn-preview"    class="action-btn icon-only" title="Перегляд / Редагування">
+        <span class="btn-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></span>
+      </button>
+      <button id="btn-emoji"      class="action-btn icon-only" title="Вставити іконку / емодзі">
+        <!-- smiley face -->
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+      </button>
+      <button id="btn-import"     class="action-btn icon-only" title="Імпорт файлу">
+        <!-- upload arrow -->
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      </button>
+      <button id="btn-export-pdf" class="action-btn icon-only" title="Експорт PDF">
+        <!-- file with PDF label -->
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="9" y2="15"/></svg><span style="font-size:9px;font-weight:700;letter-spacing:-.5px;line-height:1;margin-left:1px">PDF</span>
+      </button>
+      <button id="btn-save"       class="action-btn primary icon-only" title="Зберегти і синхронізувати (Ctrl+S)">
+        <!-- floppy disk -->
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+      </button>
+      <button id="btn-logout"     class="action-btn icon-only" title="Вийти">
+        <!-- logout arrow -->
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      </button>
     </div>
   </header>
 
