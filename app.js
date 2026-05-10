@@ -893,9 +893,13 @@ function pageToHtml(page) {
 }
 
 function exportBranchPDF(id) {
+  // Завжди зберігаємо поточний стан редактора перед експортом
+  if (state.activeId) saveCurrentEditorToPage(false);
+
   const pages = collectSubtree(id);
   const styles = `<style>
-    body{font-family:Georgia,serif;color:#111;font-size:11pt;line-height:1.75;margin:0;padding:0}
+    *{box-sizing:border-box}
+    body{font-family:Georgia,serif;color:#111;font-size:11pt;line-height:1.75;margin:0;padding:10mm 14mm}
     h1{font-size:15pt;font-weight:500;color:#1a1a2e;margin:14pt 0 3pt;border-bottom:1pt solid #4A90D9;padding-bottom:3pt}
     h2{font-size:13pt;color:#2563a8;margin:11pt 0 3pt} h3{font-size:11pt;color:#4a5568;margin:8pt 0 2pt}
     p{margin:4pt 0}ul,ol{padding-left:16pt;margin:4pt 0}
@@ -908,18 +912,25 @@ function exportBranchPDF(id) {
   </style>`;
   let body = '';
   pages.forEach((page, i) => {
-    body += (i > 0 ? '<hr>' : '') + `<div class="crumb">${getBreadcrumb(page.id)}</div><h1>${page.title}</h1>` + pageToHtml(page);
+    body += (i > 0 ? '<hr>' : '') +
+      `<div class="crumb">${getBreadcrumb(page.id)}</div><h1>${page.title}</h1>` +
+      pageToHtml(page);
   });
-  const el = document.createElement('div');
-  el.style.cssText = 'padding:10mm 12mm;background:#fff';
-  el.innerHTML = styles + body;
-  if (typeof html2pdf !== 'undefined') {
-    html2pdf().set({ margin:[10,12,10,12], filename:(state.pages[id]?.title||'export')+'.pdf', html2canvas:{scale:2,useCORS:true}, jsPDF:{unit:'mm',format:'a4'}, pagebreak:{mode:['avoid-all','css']} }).from(el).save();
-  } else {
-    const w = window.open('', '_blank');
-    w.document.write('<!DOCTYPE html><html><body>' + el.innerHTML + '</body></html>');
-    w.document.close(); setTimeout(() => w.print(), 700);
-  }
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">${styles}</head><body>${body}</body></html>`;
+
+  // Використовуємо iframe + print — векторний текст, без canvas
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:210mm;height:297mm;border:none;visibility:hidden';
+  document.body.appendChild(iframe);
+  iframe.contentDocument.open();
+  iframe.contentDocument.write(html);
+  iframe.contentDocument.close();
+  iframe.contentWindow.focus();
+  setTimeout(() => {
+    iframe.contentWindow.print();
+    setTimeout(() => document.body.removeChild(iframe), 2000);
+  }, 600);
 }
 
 function exportBranchTXT(id) {
