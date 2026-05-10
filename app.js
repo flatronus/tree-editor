@@ -816,7 +816,6 @@ function renderTree() {
       row.addEventListener('click', e => {
         if (e.target === toggle || e.target === icon || e.target.classList.contains('trash-empty-btn')) return;
         openPage(id);
-        if (window.innerWidth <= 1024) setSidebarOpen(false);
       });
     }
     row.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e.clientX, e.clientY, id); });
