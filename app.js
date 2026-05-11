@@ -1674,5 +1674,28 @@ renderTree();
 if (state.activeId && state.pages[state.activeId]) openPage(state.activeId);
 else openPage(ROOT_ID);
 
-// Firebase init — auth overlay shows/hides automatically via onAuthStateChanged
-window.addEventListener('load', () => initFirebase());
+// Firebase init — poll until firebase SDKs are ready (they load via defer)
+function waitForFirebaseAndInit() {
+  if (typeof firebase !== 'undefined' && firebase.auth && firebase.firestore) {
+    initFirebase();
+  } else {
+    setTimeout(waitForFirebaseAndInit, 100);
+  }
+}
+
+// Start as soon as DOM is ready (or immediately if already ready)
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', waitForFirebaseAndInit);
+} else {
+  waitForFirebaseAndInit();
+}
+
+// Safety fallback: if after 8 seconds still no init — show login form so user isn't stuck
+setTimeout(() => {
+  const spinner = document.getElementById('auth-spinner-wrap');
+  const forms   = document.getElementById('auth-forms');
+  if (spinner && !spinner.classList.contains('hidden')) {
+    spinner.classList.add('hidden');
+    if (forms) forms.classList.remove('hidden');
+  }
+}, 8000);
