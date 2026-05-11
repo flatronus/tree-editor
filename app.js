@@ -893,166 +893,68 @@ function pageToHtml(page) {
 }
 
 function exportBranchPDF(id) {
+  // Зберігаємо поточний стан редактора перед експортом
   if (state.activeId) saveCurrentEditorToPage(false);
 
-  const { jsPDF } = window.jspdf || {};
-  if (!jsPDF) { alert('PDF-бібліотека ще не завантажилась. Спробуйте ще раз.'); return; }
-
   const pages = collectSubtree(id);
-  if (!pages.length) return;
 
-  const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+  const styles = `
+    *{box-sizing:border-box}
+    body,div{font-family:Georgia,serif;color:#111;font-size:11pt;line-height:1.75}
+    h1{font-size:15pt;font-weight:500;color:#1a1a2e;margin:14pt 0 3pt;border-bottom:1pt solid #4A90D9;padding-bottom:3pt;page-break-after:avoid}
+    h2{font-size:13pt;color:#2563a8;margin:11pt 0 3pt;page-break-after:avoid}
+    h3{font-size:11pt;color:#4a5568;margin:8pt 0 2pt;page-break-after:avoid}
+    p{margin:4pt 0}
+    ul,ol{padding-left:16pt;margin:4pt 0}
+    pre{background:#f5f7fa;border:0.5pt solid #e2e8f0;padding:6pt 9pt;white-space:pre-wrap;font-size:9pt;font-family:monospace}
+    code{background:#f0f2f5;padding:1pt 3pt;font-family:monospace;font-size:9pt;color:#c7254e}
+    blockquote{border-left:2pt solid #4A90D9;margin:6pt 0;padding-left:9pt;color:#4a5568;font-style:italic}
+    table{width:100%;border-collapse:collapse;margin:6pt 0}
+    th{background:#eef2f8;border:0.5pt solid #cbd5e1;padding:3pt 6pt;font-weight:500}
+    td{border:0.5pt solid #e2e8f0;padding:3pt 6pt}
+    hr{border:none;border-top:0.5pt solid #e2e8f0;margin:10pt 0 7pt}
+    .crumb{font-size:8pt;color:#94a3b8;margin-bottom:1pt;font-family:monospace}
+    .plain-text{white-space:pre-wrap;font-family:monospace;font-size:10pt;line-height:1.6}
+  `;
 
-  // ── helpers ──────────────────────────────────────────────
-  const PAGE_W   = 210;
-  const MARGIN_L = 18;
-  const MARGIN_R = 18;
-  const MARGIN_T = 20;
-  const MARGIN_B = 20;
-  const TEXT_W   = PAGE_W - MARGIN_L - MARGIN_R;
-  let y = MARGIN_T;
-
-  function checkPageBreak(needed) {
-    if (y + needed > 297 - MARGIN_B) { doc.addPage(); y = MARGIN_T; }
-  }
-
-  function stripHtml(html) {
-    const tmp = document.createElement('div');
-    tmp.innerHTML = html;
-    // Convert block elements to newlines
-    tmp.querySelectorAll('p,div,li,h1,h2,h3,h4,h5,h6,br,tr').forEach(el => {
-      el.insertAdjacentText('afterend', '
-');
-    });
-    return tmp.textContent || '';
-  }
-
-  function parseMarkdownToLines(md) {
-    // Returns array of {type, text, level} for structured output
-    const lines = [];
-    const raw = md.split('\n');
-    for (let i = 0; i < raw.length; i++) {
-      const l = raw[i];
-      const h3 = l.match(/^### (.+)/);
-      const h2 = l.match(/^## (.+)/);
-      const h1 = l.match(/^# (.+)/);
-      const ul = l.match(/^[\-\*\+] (.+)/);
-      const ol = l.match(/^\d+\. (.+)/);
-      const hr = l.match(/^---+$/);
-      const bq = l.match(/^> (.+)/);
-      if (h1) lines.push({ type: 'h1', text: h1[1] });
-      else if (h2) lines.push({ type: 'h2', text: h2[1] });
-      else if (h3) lines.push({ type: 'h3', text: h3[1] });
-      else if (ul) lines.push({ type: 'li', text: '• ' + ul[1] });
-      else if (ol) lines.push({ type: 'li', text: l.replace(/^(\d+\.)/, '$1') });
-      else if (hr) lines.push({ type: 'hr' });
-      else if (bq) lines.push({ type: 'bq', text: bq[1] });
-      else lines.push({ type: 'p', text: l });
-    }
-    return lines;
-  }
-
-  function writeLine(text, opts = {}) {
-    const { fontSize = 11, bold = false, color = [17, 17, 17], indent = 0, lineH = 5.5 } = opts;
-    doc.setFontSize(fontSize);
-    doc.setFont('helvetica', bold ? 'bold' : 'normal');
-    doc.setTextColor(...color);
-    const wrapped = doc.splitTextToSize(text || '', TEXT_W - indent);
-    wrapped.forEach(line => {
-      checkPageBreak(lineH);
-      doc.text(line, MARGIN_L + indent, y);
-      y += lineH;
-    });
-  }
-
-  function writeHr() {
-    checkPageBreak(6);
-    doc.setDrawColor(200, 210, 225);
-    doc.setLineWidth(0.3);
-    doc.line(MARGIN_L, y, PAGE_W - MARGIN_R, y);
-    y += 5;
-  }
-
-  function writeSectionLines(lines) {
-    lines.forEach(item => {
-      if (!item) return;
-      switch (item.type) {
-        case 'h1': y += 3; writeLine(item.text, { fontSize: 15, bold: true, color: [26, 26, 46], lineH: 7 }); y += 1; break;
-        case 'h2': y += 2; writeLine(item.text, { fontSize: 13, bold: true, color: [37, 99, 168], lineH: 6.5 }); y += 1; break;
-        case 'h3': y += 1; writeLine(item.text, { fontSize: 11, bold: true, color: [74, 85, 104], lineH: 6 }); y += 0.5; break;
-        case 'li': writeLine(item.text, { fontSize: 10.5, indent: 5, lineH: 5.5 }); break;
-        case 'bq':
-          doc.setDrawColor(74, 144, 217);
-          doc.setLineWidth(0.8);
-          const bqLines = doc.setFontSize(10.5) && doc.splitTextToSize(item.text, TEXT_W - 8);
-          const bqH = (bqLines ? bqLines.length : 1) * 5.5;
-          checkPageBreak(bqH + 2);
-          doc.line(MARGIN_L + 2, y - 3, MARGIN_L + 2, y - 3 + bqH);
-          writeLine(item.text, { fontSize: 10.5, indent: 7, color: [74, 85, 104], lineH: 5.5 });
-          y += 1;
-          break;
-        case 'hr': writeHr(); break;
-        case 'p':
-          if (item.text.trim()) writeLine(item.text, { fontSize: 11, lineH: 5.5 });
-          else y += 2.5; // empty line = paragraph gap
-          break;
-      }
-    });
-  }
-
-  // ── render each page ─────────────────────────────────────
+  let body = '';
   pages.forEach((page, i) => {
-    if (i > 0) {
-      // Separator between pages
-      y += 4;
-      checkPageBreak(8);
-      writeHr();
-      y += 2;
-    }
-
-    // Breadcrumb
-    const crumb = getBreadcrumb(page.id);
-    if (crumb) {
-      doc.setFontSize(8);
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(148, 163, 184);
-      checkPageBreak(4.5);
-      doc.text(crumb, MARGIN_L, y);
-      y += 4.5;
-    }
-
-    // Page title (H1)
-    writeLine(page.title || 'Без назви', { fontSize: 16, bold: true, color: [26, 26, 46], lineH: 8 });
-
-    // Title underline
-    doc.setDrawColor(74, 144, 217);
-    doc.setLineWidth(0.5);
-    doc.line(MARGIN_L, y, PAGE_W - MARGIN_R, y);
-    y += 4;
-
-    // Content
     const fmt = page.format && page.format !== 'auto' ? page.format : 'plain';
-    const raw = page.content || '';
-
-    if (fmt === 'markdown') {
-      const lines = parseMarkdownToLines(raw);
-      writeSectionLines(lines);
+    let content = '';
+    if (fmt === 'markdown' && typeof marked !== 'undefined') {
+      content = marked.parse(page.content || '');
     } else if (fmt === 'rich') {
-      // Strip HTML and render as plain with basic structure
-      const text = stripHtml(raw);
-      const lines = text.split('\n').map(l => ({ type: 'p', text: l }));
-      writeSectionLines(lines);
+      content = page.content || '';
     } else {
-      // Plain text
-      const lines = raw.split('\n').map(l => ({ type: 'p', text: l }));
-      writeSectionLines(lines);
+      content = '<div class="plain-text">' +
+        (page.content || '').replace(/&/g, '&amp;').replace(/</g, '&lt;') +
+        '</div>';
     }
-
-    y += 3;
+    body += (i > 0 ? '<hr>' : '') +
+      `<div class="crumb">${getBreadcrumb(page.id)}</div>` +
+      `<h1>${page.title}</h1>` +
+      content;
   });
 
+  // Елемент МУСИТЬ бути в DOM — інакше html2canvas рендерить пусто
+  const el = document.createElement('div');
+  el.style.cssText = 'position:fixed;left:-9999px;top:0;width:180mm;background:#fff;padding:0;';
+  el.innerHTML = `<style>${styles}</style><div style="padding:12mm 14mm">${body}</div>`;
+  document.body.appendChild(el);
+
   const filename = (state.pages[id]?.title || 'export').replace(/[/\\?%*:|"<>]/g, '-') + '.pdf';
-  doc.save(filename);
+
+  html2pdf()
+    .set({
+      margin: 0,
+      filename,
+      html2canvas: { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff' },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      pagebreak: { mode: ['css', 'legacy'] }
+    })
+    .from(el)
+    .save()
+    .finally(() => { document.body.removeChild(el); });
 }
 
 function exportBranchTXT(id) {
@@ -1674,28 +1576,5 @@ renderTree();
 if (state.activeId && state.pages[state.activeId]) openPage(state.activeId);
 else openPage(ROOT_ID);
 
-// Firebase init — poll until firebase SDKs are ready (they load via defer)
-function waitForFirebaseAndInit() {
-  if (typeof firebase !== 'undefined' && firebase.auth && firebase.firestore) {
-    initFirebase();
-  } else {
-    setTimeout(waitForFirebaseAndInit, 100);
-  }
-}
-
-// Start as soon as DOM is ready (or immediately if already ready)
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', waitForFirebaseAndInit);
-} else {
-  waitForFirebaseAndInit();
-}
-
-// Safety fallback: if after 8 seconds still no init — show login form so user isn't stuck
-setTimeout(() => {
-  const spinner = document.getElementById('auth-spinner-wrap');
-  const forms   = document.getElementById('auth-forms');
-  if (spinner && !spinner.classList.contains('hidden')) {
-    spinner.classList.add('hidden');
-    if (forms) forms.classList.remove('hidden');
-  }
-}, 8000);
+// Firebase init — auth overlay shows/hides automatically via onAuthStateChanged
+window.addEventListener('load', () => initFirebase());
