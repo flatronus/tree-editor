@@ -1190,11 +1190,22 @@ function showModal(text, onConfirm) {
 // ════════════════════════════════════════════════════════════
 //  SIDEBAR
 // ════════════════════════════════════════════════════════════
+function updateTopbarHeight() {
+  const h = document.getElementById('global-topbar').offsetHeight;
+  document.documentElement.style.setProperty('--topbar-actual-h', h + 'px');
+}
 function setSidebarOpen(open) {
   const sb = document.getElementById('sidebar');
   const isMobile = window.innerWidth <= 1024;
-  if (isMobile) { sb.style.top = document.getElementById('global-topbar').offsetHeight + 'px'; sb.classList.toggle('mobile-open', open); sb.classList.remove('collapsed'); }
-  else { sb.classList.toggle('collapsed', !open); }
+  updateTopbarHeight();
+  if (isMobile) {
+    sb.classList.toggle('mobile-open', open);
+    sb.classList.remove('collapsed');
+    const bd = document.getElementById('sidebar-backdrop');
+    if (bd) bd.classList.toggle('visible', open);
+  } else {
+    sb.classList.toggle('collapsed', !open);
+  }
   localStorage.setItem(LS_SO, open ? '1' : '0');
   const arrow = document.getElementById('sidebar-arrow');
   if (arrow) arrow.innerHTML = open ? '&#8592;' : '&#8594;';
@@ -1207,6 +1218,13 @@ function toggleSidebar() {
 }
 document.getElementById('btn-toggle-sidebar').addEventListener('click', toggleSidebar);
 document.getElementById('editor-area').addEventListener('click', () => { if (window.innerWidth <= 1024) setSidebarOpen(false); });
+// Backdrop click closes sidebar
+document.addEventListener('DOMContentLoaded', () => {
+  const bd = document.getElementById('sidebar-backdrop');
+  if (bd) bd.addEventListener('click', () => setSidebarOpen(false));
+});
+// Update topbar height on resize (for 2-row topbar on mobile)
+window.addEventListener('resize', updateTopbarHeight);
 
 // Resize handle
 (function () {
