@@ -914,9 +914,10 @@ function exportBranchPDF(id) {
   }
 
   // Використовуємо jsPDF якщо доступна
-  if (typeof window.jspdf !== 'undefined' || typeof window.jsPDF !== 'undefined') {
-    const { jsPDF } = window.jspdf || window;
-    const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+  const _jsPDFCtor = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF || (window.jspdf);
+  if (typeof _jsPDFCtor === 'function') {
+    try {
+    const doc = new _jsPDFCtor({ unit: 'mm', format: 'a4', orientation: 'portrait' });
     const pageW = doc.internal.pageSize.getWidth();
     const margin = 18;
     const maxW = pageW - margin * 2;
@@ -949,10 +950,14 @@ function exportBranchPDF(id) {
 
     doc.save(filename);
     return;
+    } catch (e) {
+      console.error('jsPDF помилка:', e);
+      // fall through to iframe fallback
+    }
   }
 
-  // Fallback: генеруємо HTML і завантажуємо як .html якщо jsPDF недоступна
-  console.warn('jsPDF не завантажено — fallback до HTML-друку');
+  // Fallback: iframe print якщо jsPDF недоступна або кинула помилку
+  console.warn('jsPDF недоступна — fallback до iframe-друку');
   exportBranchPDFFallback(id, pages, filename);
 }
 
