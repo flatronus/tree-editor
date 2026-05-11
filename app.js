@@ -899,65 +899,8 @@ function exportBranchPDF(id) {
   const pages = collectSubtree(id);
   const filename = (state.pages[id]?.title || 'export').replace(/[/\\?%*:|"<>]/g, '-') + '.pdf';
 
-  // Збираємо текстовий контент кожної сторінки
-  function stripHtml(html) {
-    const tmp = document.createElement('div');
-    tmp.innerHTML = html;
-    return tmp.textContent || tmp.innerText || '';
-  }
-
-  function getPlainContent(page) {
-    const fmt = page.format && page.format !== 'auto' ? page.format : 'plain';
-    if (fmt === 'rich') return stripHtml(page.content || '');
-    if (fmt === 'markdown' && typeof marked !== 'undefined') return stripHtml(marked.parse(page.content || ''));
-    return page.content || '';
-  }
-
-  // Використовуємо jsPDF якщо доступна
-  const _jsPDFCtor = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF || (window.jspdf);
-  if (typeof _jsPDFCtor === 'function') {
-    try {
-    const doc = new _jsPDFCtor({ unit: 'mm', format: 'a4', orientation: 'portrait' });
-    const pageW = doc.internal.pageSize.getWidth();
-    const margin = 18;
-    const maxW = pageW - margin * 2;
-    let y = margin;
-
-    const addText = (text, fontSize, style, color) => {
-      doc.setFontSize(fontSize);
-      doc.setFont('helvetica', style || 'normal');
-      doc.setTextColor(...(color || [17, 17, 17]));
-      const lines = doc.splitTextToSize(text, maxW);
-      lines.forEach(line => {
-        if (y > 272) { doc.addPage(); y = margin; }
-        doc.text(line, margin, y);
-        y += fontSize * 0.45;
-      });
-    };
-
-    pages.forEach((page, i) => {
-      if (i > 0) { y += 6; if (y > 260) { doc.addPage(); y = margin; } }
-      const crumb = getBreadcrumb(page.id);
-      if (crumb) { addText(crumb, 7, 'normal', [148, 163, 184]); y += 1; }
-      addText(page.title || '(без назви)', 15, 'bold', [26, 26, 46]);
-      y += 2;
-      const content = getPlainContent(page);
-      if (content.trim()) {
-        addText(content.trim(), 10, 'normal', [34, 34, 34]);
-      }
-      y += 4;
-    });
-
-    doc.save(filename);
-    return;
-    } catch (e) {
-      console.error('jsPDF помилка:', e);
-      // fall through to iframe fallback
-    }
-  }
-
-  // Fallback: iframe print якщо jsPDF недоступна або кинула помилку
-  console.warn('jsPDF недоступна — fallback до iframe-друку');
+  // jsPDF не підтримує кирилицю без вбудованого шрифту — завжди
+  // використовуємо iframe + браузерний друк (правильне кодування, будь-який алфавіт)
   exportBranchPDFFallback(id, pages, filename);
 }
 
