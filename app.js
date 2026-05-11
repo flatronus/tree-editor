@@ -897,64 +897,95 @@ function exportBranchPDF(id) {
   if (state.activeId) saveCurrentEditorToPage(false);
 
   const pages = collectSubtree(id);
-
-  const styles = `
-    *{box-sizing:border-box}
-    body,div{font-family:Georgia,serif;color:#111;font-size:11pt;line-height:1.75}
-    h1{font-size:15pt;font-weight:500;color:#1a1a2e;margin:14pt 0 3pt;border-bottom:1pt solid #4A90D9;padding-bottom:3pt;page-break-after:avoid}
-    h2{font-size:13pt;color:#2563a8;margin:11pt 0 3pt;page-break-after:avoid}
-    h3{font-size:11pt;color:#4a5568;margin:8pt 0 2pt;page-break-after:avoid}
-    p{margin:4pt 0}
-    ul,ol{padding-left:16pt;margin:4pt 0}
-    pre{background:#f5f7fa;border:0.5pt solid #e2e8f0;padding:6pt 9pt;white-space:pre-wrap;font-size:9pt;font-family:monospace}
-    code{background:#f0f2f5;padding:1pt 3pt;font-family:monospace;font-size:9pt;color:#c7254e}
-    blockquote{border-left:2pt solid #4A90D9;margin:6pt 0;padding-left:9pt;color:#4a5568;font-style:italic}
-    table{width:100%;border-collapse:collapse;margin:6pt 0}
-    th{background:#eef2f8;border:0.5pt solid #cbd5e1;padding:3pt 6pt;font-weight:500}
-    td{border:0.5pt solid #e2e8f0;padding:3pt 6pt}
-    hr{border:none;border-top:0.5pt solid #e2e8f0;margin:10pt 0 7pt}
-    .crumb{font-size:8pt;color:#94a3b8;margin-bottom:1pt;font-family:monospace}
-    .plain-text{white-space:pre-wrap;font-family:monospace;font-size:10pt;line-height:1.6}
-  `;
-
-  let body = '';
-  pages.forEach((page, i) => {
-    const fmt = page.format && page.format !== 'auto' ? page.format : 'plain';
-    let content = '';
-    if (fmt === 'markdown' && typeof marked !== 'undefined') {
-      content = marked.parse(page.content || '');
-    } else if (fmt === 'rich') {
-      content = page.content || '';
-    } else {
-      content = '<div class="plain-text">' +
-        (page.content || '').replace(/&/g, '&amp;').replace(/</g, '&lt;') +
-        '</div>';
-    }
-    body += (i > 0 ? '<hr>' : '') +
-      `<div class="crumb">${getBreadcrumb(page.id)}</div>` +
-      `<h1>${page.title}</h1>` +
-      content;
-  });
-
-  // Елемент МУСИТЬ бути в DOM — інакше html2canvas рендерить пусто
-  const el = document.createElement('div');
-  el.style.cssText = 'position:fixed;left:-9999px;top:0;width:180mm;background:#fff;padding:0;';
-  el.innerHTML = `<style>${styles}</style><div style="padding:12mm 14mm">${body}</div>`;
-  document.body.appendChild(el);
-
   const filename = (state.pages[id]?.title || 'export').replace(/[/\\?%*:|"<>]/g, '-') + '.pdf';
 
-  html2pdf()
-    .set({
-      margin: 0,
-      filename,
-      html2canvas: { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff' },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-      pagebreak: { mode: ['css', 'legacy'] }
-    })
-    .from(el)
-    .save()
-    .finally(() => { document.body.removeChild(el); });
+  // Збираємо текстовий контент кожної сторінки
+  function stripHtml(html) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    return tmp.textContent || tmp.innerText || '';
+  }
+
+  function getPlainContent(page) {
+    const fmt = page.format && page.format !== 'auto' ? page.format : 'plain';
+    if (fmt === 'rich') return stripHtml(page.content || '');
+    if (fmt === 'markdown' && typeof marked !== 'undefined') return stripHtml(marked.parse(page.content || ''));
+    return page.content || '';
+  }
+
+  // Використовуємо jsPDF якщо доступна
+  if (typeof window.jspdf !== 'undefined' || typeof window.jsPDF !== 'undefined') {
+    const { jsPDF } = window.jspdf || window;
+    const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+    const pageW = doc.internal.pageSize.getWidth();
+    const margin = 18;
+    const maxW = pageW - margin * 2;
+    let y = margin;
+
+    const addText = (text, fontSize, style, color) => {
+      doc.setFontSize(fontSize);
+      doc.setFont('helvetica', style || 'normal');
+      doc.setTextColor(...(color || [17, 17, 17]));
+      const lines = doc.splitTextToSize(text, maxW);
+      lines.forEach(line => {
+        if (y > 272) { doc.addPage(); y = margin; }
+        doc.text(line, margin, y);
+        y += fontSize * 0.45;
+      });
+    };
+
+    pages.forEach((page, i) => {
+      if (i > 0) { y += 6; if (y > 260) { doc.addPage(); y = margin; } }
+      const crumb = getBreadcrumb(page.id);
+      if (crumb) { addText(crumb, 7, 'normal', [148, 163, 184]); y += 1; }
+      addText(page.title || '(без назви)', 15, 'bold', [26, 26, 46]);
+      y += 2;
+      const content = getPlainContent(page);
+      if (content.trim()) {
+        addText(content.trim(), 10, 'normal', [34, 34, 34]);
+      }
+      y += 4;
+    });
+
+    doc.save(filename);
+    return;
+  }
+
+  // Fallback: генеруємо HTML і завантажуємо як .html якщо jsPDF недоступна
+  console.warn('jsPDF не завантажено — fallback до HTML-друку');
+  exportBranchPDFFallback(id, pages, filename);
+}
+
+function exportBranchPDFFallback(id, pages, filename) {
+  const styles = `
+    *{box-sizing:border-box}
+    body{font-family:Georgia,serif;color:#111;font-size:11pt;line-height:1.75;margin:0;padding:14mm 18mm}
+    h1{font-size:15pt;font-weight:700;color:#1a1a2e;margin:14pt 0 3pt;border-bottom:1pt solid #4A90D9;padding-bottom:3pt;page-break-after:avoid}
+    p{margin:4pt 0}
+    pre{white-space:pre-wrap;font-family:monospace;font-size:10pt;line-height:1.6;margin:4pt 0}
+    hr{border:none;border-top:1pt solid #e2e8f0;margin:12pt 0}
+    .crumb{font-size:8pt;color:#94a3b8;margin-bottom:2pt;font-family:monospace}
+  `;
+  let body = '';
+  pages.forEach((page, i) => {
+    const content = pageToHtml(page);
+    body += (i > 0 ? '<hr>' : '') +
+      `<div class="crumb">${getBreadcrumb(page.id)}</div>` +
+      `<h1>${page.title || '(без назви)'}</h1>` +
+      content + '\n';
+  });
+
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'position:fixed;left:-9999px;top:0;width:210mm;height:297mm;border:none';
+  document.body.appendChild(iframe);
+  iframe.contentDocument.open();
+  iframe.contentDocument.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><style>${styles}</style></head><body>${body}</body></html>`);
+  iframe.contentDocument.close();
+  setTimeout(() => {
+    iframe.contentWindow.focus();
+    iframe.contentWindow.print();
+    setTimeout(() => document.body.removeChild(iframe), 1000);
+  }, 400);
 }
 
 function exportBranchTXT(id) {
