@@ -916,8 +916,10 @@ function exportBranchPDFFallback(id, pages) {
     h3{font-size:11pt;font-weight:700;margin:10pt 0 2pt}
     p{margin:4pt 0}
     pre{white-space:pre-wrap;font-family:monospace;font-size:10pt;line-height:1.6;margin:4pt 0}
-    ul,ol{margin:4pt 0;padding-left:20pt}
-    li{margin:2pt 0}
+    ul{margin:4pt 0;padding-left:20pt;list-style-type:disc}
+    ol{margin:4pt 0;padding-left:20pt;list-style-type:decimal}
+    ul ul{list-style-type:circle}
+    li{margin:2pt 0;display:list-item}
     blockquote{border-left:3pt solid #4A90D9;margin:6pt 0;padding:2pt 10pt;color:#444}
     code{font-family:monospace;background:#f1f5f9;padding:1pt 3pt;border-radius:2pt}
     .sep{border:none;border-top:1pt solid #e2e8f0;margin:10pt 0}
