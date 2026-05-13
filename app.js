@@ -885,12 +885,17 @@ function saveBranch(id) {
 // ════════════════════════════════════════════════════════════
 //  EXPORT
 // ════════════════════════════════════════════════════════════
+function markedParse(text) {
+  const mk = window.marked || (typeof marked !== 'undefined' ? marked : null);
+  if (!mk) return text.replace(/\n/g, '<br>');
+  // gfm: GitHub Flavored Markdown (таблиці, списки без порожнього рядка перед ними)
+  // breaks: одиночний \n → <br> (як у більшості редакторів)
+  try { return mk.parse(text, { gfm: true, breaks: true }); } catch(e) { return mk.parse(text); }
+}
+
 function pageToHtml(page) {
   const fmt = resolveFormat(page);
-  if (fmt === 'markdown') {
-    const mk = window.marked || (typeof marked !== 'undefined' ? marked : null);
-    return mk ? mk.parse(page.content || '') : (page.content || '').replace(/\n/g, '<br>');
-  }
+  if (fmt === 'markdown') return markedParse(page.content || '');
   if (fmt === 'rich') return page.content || '';
   return '<pre>' + (page.content || '').replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</pre>';
 }
@@ -1063,7 +1068,7 @@ function togglePreview() {
   if (!previewActive) {
     let html = '';
     const c = getEditorContent();
-    if (activeFormat === 'markdown') html = typeof marked !== 'undefined' ? marked.parse(c) : c.replace(/\n/g,'<br>');
+    if (activeFormat === 'markdown') html = markedParse(c);
     else if (activeFormat === 'rich') html = c;
     else html = '<pre style="white-space:pre-wrap">' + c.replace(/</g,'&lt;') + '</pre>';
     prev.innerHTML = html;
