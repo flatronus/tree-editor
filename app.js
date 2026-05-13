@@ -484,7 +484,7 @@ function rebuildChildrenFromParentId() {
 function createPage(parentId) {
   const id = uid();
   const now = Date.now();
-  const page = { id, title: 'Новий', content: '', format: 'plain', parentId, children: [], createdAt: now, updatedAt: now };
+  const page = { id, title: 'Новий', content: '', format: 'markdown', parentId, children: [], createdAt: now, updatedAt: now };
   state.pages[id] = page;
   const parent = state.pages[parentId];
   if (parent) {
