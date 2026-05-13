@@ -895,9 +895,10 @@ function markedParse(text) {
 
 function pageToHtml(page) {
   const fmt = resolveFormat(page);
-  if (fmt === 'markdown') return markedParse(page.content || '');
   if (fmt === 'rich') return page.content || '';
-  return '<pre>' + (page.content || '').replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</pre>';
+  // plain і markdown — обидва рендеримо через marked.
+  // plain-сторінки часто містять markdown-синтаксис, а <pre> ламає вигляд PDF.
+  return markedParse(page.content || '');
 }
 
 function exportBranchPDF(id) {
