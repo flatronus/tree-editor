@@ -896,60 +896,53 @@ function pageToHtml(page) {
 }
 
 function exportBranchPDF(id) {
-  // Зберігаємо поточний стан редактора перед експортом
   if (state.activeId) saveCurrentEditorToPage(false);
-
   const pages = collectSubtree(id);
-  const filename = (state.pages[id]?.title || 'export').replace(/[/\\?%*:|"<>]/g, '-') + '.pdf';
-
-  // jsPDF не підтримує кирилицю без вбудованого шрифту — завжди
-  // використовуємо iframe + браузерний друк (правильне кодування, будь-який алфавіт)
-  exportBranchPDFFallback(id, pages, filename);
+  exportBranchPDFFallback(id, pages);
 }
 
-function exportBranchPDFFallback(id, pages, filename) {
+function exportBranchPDFFallback(id, pages) {
   const styles = `
     *{box-sizing:border-box}
     body{font-family:Georgia,serif;color:#111;font-size:11pt;line-height:1.75;margin:0;padding:14mm 18mm}
-    h1{font-size:15pt;font-weight:700;color:#1a1a2e;margin:14pt 0 3pt;border-bottom:1pt solid #4A90D9;padding-bottom:3pt;page-break-after:avoid}
+    h1{font-size:15pt;font-weight:700;color:#1a1a2e;margin:20pt 0 3pt;border-bottom:1pt solid #4A90D9;padding-bottom:3pt;page-break-after:avoid}
+    h1:first-of-type{margin-top:0}
+    h2{font-size:13pt;font-weight:700;margin:12pt 0 2pt}
+    h3{font-size:11pt;font-weight:700;margin:10pt 0 2pt}
     p{margin:4pt 0}
     pre{white-space:pre-wrap;font-family:monospace;font-size:10pt;line-height:1.6;margin:4pt 0}
     ul,ol{margin:4pt 0;padding-left:20pt}
     li{margin:2pt 0}
     blockquote{border-left:3pt solid #4A90D9;margin:6pt 0;padding:2pt 10pt;color:#444}
     code{font-family:monospace;background:#f1f5f9;padding:1pt 3pt;border-radius:2pt}
-    .page-block{page-break-before:auto}
-    .page-block+.page-block{page-break-before:always}
+    .sep{border:none;border-top:1pt solid #e2e8f0;margin:10pt 0}
     .crumb{font-size:8pt;color:#94a3b8;margin-bottom:2pt;font-family:monospace}
-    @media print{.page-block+.page-block{page-break-before:always}}
   `;
+  // Рендеримо markdown ТУТ у батьківському вікні (доступ до window.marked).
+  // Новий таб не має доступу до marked з батьківського контексту.
   let body = '';
   pages.forEach((page, i) => {
     const content = pageToHtml(page);
-    body += `<div class="page-block">` +
+    body += (i > 0 ? '<hr class="sep">' : '') +
       `<div class="crumb">${getBreadcrumb(page.id)}</div>` +
       `<h1>${page.title || '(без назви)'}</h1>` +
-      content +
-      `</div>\n`;
+      content + '\n';
   });
 
   const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${pages[0]?.title || 'export'}</title><style>${styles}</style></head><body>${body}<script>window.onload=function(){setTimeout(function(){window.print();},300);}<\/script></body></html>`;
 
-  // На мобільних/планшетах iframe.print() не працює коректно —
-  // відкриваємо у новому вікні де браузер друкує саме цей документ.
+  // window.open працює на всіх платформах (включно iOS/Android Safari).
+  // iframe.print() на мобільних Safari друкує батьківський viewport.
   const win = window.open('', '_blank');
   if (win) {
     win.document.write(html);
     win.document.close();
-    // Вікно саме викличе print() через onload вище
   } else {
-    // Fallback якщо popup заблокований — використовуємо blob URL
+    // Fallback: popup заблокований — blob URL
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    a.target = '_blank';
-    a.rel = 'noopener';
+    a.href = url; a.target = '_blank'; a.rel = 'noopener';
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
@@ -960,13 +953,8 @@ function exportBranchTXT(id) {
     const fmt = resolveFormat(p);
     let content = p.content || '';
     if (fmt === 'rich') {
-      // Strip HTML tags з rich-тексту
       content = content.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n').replace(/<\/li>/gi, '\n').replace(/<[^>]+>/g, '');
-    } else if (fmt === 'markdown') {
-      // Markdown залишаємо як є — це вже читабельний текст
-      // (для TXT-файлу markdown-синтаксис цілком зрозумілий)
     }
-    // Прибираємо зайві пробіли/&nbsp;
     content = content.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
     return (i > 0 ? '\n\n' + '─'.repeat(60) + '\n\n' : '') + `# ${p.title}\n${getBreadcrumb(p.id)}\n\n` + content;
   }).join('');
