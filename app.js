@@ -21,7 +21,7 @@ const FB_CONFIG = {
 };
 
 // ── App state ───────────────────────────────────────────────
-let state        = { pages: {}, activeId: null };
+let state        = { pages: {}, activeId: null, nextIndex: 1 };
 let unsaved      = false;
 let activeFormat = 'plain';
 let previewActive = false;
@@ -161,6 +161,7 @@ async function syncFromFirestore() {
       }
       ensureRoot();
       rebuildChildrenFromParentId();
+      assignMissingPageIndexes();
       saveLocalOnly();
       renderTree();
       if (state.activeId && state.pages[state.activeId]) openPage(state.activeId);
@@ -170,6 +171,10 @@ async function syncFromFirestore() {
         const meta = await metaDoc().get();
         const raw = meta.exists ? meta.data().lastSync : null;
         localLastSync = raw?.toMillis ? raw.toMillis() : (raw || Date.now());
+        // Sync nextIndex from server (take the max to avoid reuse)
+        if (meta.exists && meta.data().nextIndex) {
+          state.nextIndex = Math.max(state.nextIndex, meta.data().nextIndex);
+        }
       } catch (_) { localLastSync = Date.now(); }
       setSyncStatus('synced');
     } else {
@@ -253,6 +258,7 @@ async function pullChangesFromDB() {
     if (treeChanged) {
       ensureRoot();
       rebuildChildrenFromParentId();
+      assignMissingPageIndexes();
       saveLocalOnly();
       renderTree();
       if (activeChanged) {
@@ -351,7 +357,7 @@ async function flushWriteQueue() {
     });
     await batch.commit();
     // Use serverTimestamp so all devices compare against the same clock
-    await metaDoc().set({ lastSync: firebase.firestore.FieldValue.serverTimestamp() });
+    await metaDoc().set({ lastSync: firebase.firestore.FieldValue.serverTimestamp(), nextIndex: state.nextIndex });
     // Read back the actual server timestamp so our localLastSync matches exactly
     const metaSnap = await metaDoc().get();
     localLastSync = metaSnap.exists ? (metaSnap.data().lastSync?.toMillis?.() || Date.now()) : Date.now();
@@ -415,7 +421,7 @@ document.getElementById('btn-logout').addEventListener('click', () => {
 //  LOCAL STORAGE
 // ════════════════════════════════════════════════════════════
 function saveLocalOnly() {
-  try { localStorage.setItem(LS_KEY, JSON.stringify({ pages: state.pages, activeId: state.activeId })); }
+  try { localStorage.setItem(LS_KEY, JSON.stringify({ pages: state.pages, activeId: state.activeId, nextIndex: state.nextIndex })); }
   catch (e) { console.warn(e); }
 }
 function saveState() { saveLocalOnly(); }
@@ -427,6 +433,7 @@ function loadState() {
       const p = JSON.parse(raw);
       state.pages = p.pages || {};
       state.activeId = p.activeId || null;
+      state.nextIndex = p.nextIndex || 1;
       // Migrate old reserved id
       if (state.pages['__root__']) {
         state.pages[ROOT_ID] = { ...state.pages['__root__'], id: ROOT_ID };
@@ -436,8 +443,29 @@ function loadState() {
       Object.values(state.pages).forEach(p => {
         if (p.parentId === '__root__') p.parentId = ROOT_ID;
       });
+      // Migrate: assign pageIndex to existing pages that don't have one
+      assignMissingPageIndexes();
     }
   } catch (e) { console.warn(e); }
+}
+
+// Assign pageIndex to pages that don't have one yet (migration for existing data)
+function assignMissingPageIndexes() {
+  // Collect pages that need an index (exclude root/trash system nodes)
+  const needIndex = Object.values(state.pages).filter(p =>
+    p.id !== ROOT_ID && p.id !== TRASH_ID && (p.pageIndex == null)
+  );
+  // Sort by createdAt so older pages get lower numbers
+  needIndex.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  needIndex.forEach(p => {
+    p.pageIndex = state.nextIndex++;
+  });
+  // Also sync nextIndex to be higher than any existing index
+  Object.values(state.pages).forEach(p => {
+    if (p.pageIndex != null && p.pageIndex >= state.nextIndex) {
+      state.nextIndex = p.pageIndex + 1;
+    }
+  });
 }
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
@@ -484,7 +512,8 @@ function rebuildChildrenFromParentId() {
 function createPage(parentId) {
   const id = uid();
   const now = Date.now();
-  const page = { id, title: 'Новий', content: '', format: 'markdown', parentId, children: [], createdAt: now, updatedAt: now };
+  const pageIndex = state.nextIndex++;
+  const page = { id, title: 'Новий', content: '', format: 'markdown', parentId, children: [], createdAt: now, updatedAt: now, pageIndex };
   state.pages[id] = page;
   const parent = state.pages[parentId];
   if (parent) {
@@ -782,7 +811,11 @@ function renderTree() {
     // Label
     const label = document.createElement('span');
     label.className = 'tree-label';
-    label.textContent = page.title;
+    if (id !== ROOT_ID && id !== TRASH_ID && page.pageIndex != null) {
+      label.textContent = page.pageIndex + '. ' + page.title;
+    } else {
+      label.textContent = page.title;
+    }
 
     row.append(toggle, icon, label);
 
