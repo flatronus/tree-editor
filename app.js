@@ -970,12 +970,17 @@ function exportBranchPDFFallback(id, pages) {
   `;
   // Рендеримо markdown ТУТ у батьківському вікні (доступ до window.marked).
   // Новий таб не має доступу до marked з батьківського контексту.
+  const pdfIndexMap = buildIndexMap();
   let body = '';
   pages.forEach((page, i) => {
     const content = pageToHtml(page);
+    const pageIdx = pdfIndexMap.get(page.id);
+    const titleHtml = pageIdx
+      ? `<span style="color:#4A90D9;font-weight:400;margin-right:0.3em">${pageIdx}</span> ${page.title || '(без назви)'}`
+      : (page.title || '(без назви)');
     body += (i > 0 ? '<hr class="sep">' : '') +
       `<div class="crumb">${getBreadcrumb(page.id)}</div>` +
-      `<h1>${page.title || '(без назви)'}</h1>` +
+      `<h1>${titleHtml}</h1>` +
       content + '\n';
   });
 
