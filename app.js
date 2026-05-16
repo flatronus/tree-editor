@@ -970,13 +970,34 @@ function exportBranchPDFFallback(id, pages) {
   `;
   // Рендеримо markdown ТУТ у батьківському вікні (доступ до window.marked).
   // Новий таб не має доступу до marked з батьківського контексту.
+  // Будуємо індекс напряму — не покладаємось на children[], який може бути не актуальний
   const pdfIndexMap = buildIndexMap();
+  // Якщо map порожній (children[] не збудований) — будуємо з parentId
+  function getPdfIndex(pageId) {
+    if (pdfIndexMap.has(pageId)) return pdfIndexMap.get(pageId);
+    // Fallback: пройти вгору по parentId і зібрати позиції
+    const chain = [];
+    let cur = state.pages[pageId];
+    while (cur && cur.parentId && cur.parentId !== TRASH_ID) {
+      const parent = state.pages[cur.parentId];
+      if (!parent) break;
+      const siblings = Object.values(state.pages)
+        .filter(p => p.parentId === cur.parentId && p.parentId !== TRASH_ID && !isInTrash(p.id))
+        .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      const pos = siblings.findIndex(p => p.id === cur.id);
+      if (pos === -1) break;
+      chain.unshift(pos + 1);
+      cur = parent;
+      if (cur.id === ROOT_ID) break;
+    }
+    return chain.length ? chain.join('.') : null;
+  }
   let body = '';
   pages.forEach((page, i) => {
     const content = pageToHtml(page);
-    const pageIdx = pdfIndexMap.get(page.id);
+    const pageIdx = getPdfIndex(page.id);
     const titleHtml = pageIdx
-      ? `<span style="color:#4A90D9;font-weight:400;margin-right:0.3em">${pageIdx}</span> ${page.title || '(без назви)'}`
+      ? `<span style="color:#4A90D9;font-weight:400;margin-right:0.3em">${pageIdx}</span>\u2002${page.title || '(без назви)'}`
       : (page.title || '(без назви)');
     body += (i > 0 ? '<hr class="sep">' : '') +
       `<div class="crumb">${getBreadcrumb(page.id)}</div>` +
