@@ -983,6 +983,7 @@ function openPage(id) {
   document.getElementById('empty-state').classList.add('hidden');
   document.getElementById('editor-wrap').classList.remove('hidden');
   document.getElementById('page-title').value = page.title;
+  autoResizeTitle();
   document.getElementById('format-select').value = (page.format && page.format !== 'auto') ? page.format : 'plain';
   updateBreadcrumb(id);
 
@@ -997,6 +998,11 @@ function openPage(id) {
   updateWordCount();
   setUnsaved(false);
   renderTree();
+
+  // Якщо markdown і є контент — одразу показуємо preview
+  if (activeFormat === 'markdown' && (page.content || '').trim()) {
+    togglePreview();
+  }
 }
 
 function reloadEditorContent(page) {
@@ -1364,9 +1370,16 @@ document.getElementById('btn-new-page').addEventListener('click', () => {
 });
 document.getElementById('btn-create-first').addEventListener('click', () => document.getElementById('btn-new-page').click());
 
+function autoResizeTitle() {
+  const el = document.getElementById('page-title');
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 'px';
+}
 document.getElementById('page-title').addEventListener('input', e => {
   if (state.activeId && state.pages[state.activeId]) { state.pages[state.activeId].title = e.target.value || 'Новий'; updateBreadcrumb(state.activeId); renderTree(); }
   unsaved = true; setSyncStatus('pending');
+  autoResizeTitle();
 });
 document.getElementById('editor-plain').addEventListener('input', () => { unsaved = true; setSyncStatus('pending'); updateWordCount(); if (state.pages[state.activeId]?.format === 'auto') updateStatusFormat(detectFormat(document.getElementById('editor-plain').value)); });
 document.getElementById('editor-rich').addEventListener('input', () => { unsaved = true; setSyncStatus('pending'); updateWordCount(); });
