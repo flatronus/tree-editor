@@ -1030,20 +1030,16 @@ function openPage(id) {
   // Show hierarchical index badge before title in editor titlebar
   const idxMap = buildIndexMap();
   const pageIdx = idxMap.get(id);
-  let titleIndexBadge = document.getElementById('editor-title-index');
-  if (!titleIndexBadge) {
-    titleIndexBadge = document.createElement('span');
-    titleIndexBadge.id = 'editor-title-index';
-    titleIndexBadge.className = 'editor-title-index';
-    const titlebar = document.getElementById('editor-titlebar');
-    titlebar.insertBefore(titleIndexBadge, titlebar.firstChild);
-  }
+  const titlebar = document.getElementById('editor-titlebar');
   if (pageIdx) {
-    titleIndexBadge.textContent = pageIdx;
-    titleIndexBadge.style.display = '';
+    titlebar.dataset.index = pageIdx + '\u2002';
   } else {
-    titleIndexBadge.style.display = 'none';
+    delete titlebar.dataset.index;
   }
+
+  // Remove any old span badge if present from previous version
+  const oldBadge = document.getElementById('editor-title-index');
+  if (oldBadge) oldBadge.remove();
 
   document.getElementById('format-select').value = (page.format && page.format !== 'auto') ? page.format : 'plain';
   updateBreadcrumb(id);
