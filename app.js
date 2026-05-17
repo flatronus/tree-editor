@@ -932,7 +932,28 @@ function markedParse(text) {
   if (!mk) return text.replace(/\n/g, '<br>');
   // gfm: GitHub Flavored Markdown (таблиці, списки без порожнього рядка перед ними)
   // breaks: одиночний \n → <br> (як у більшості редакторів)
-  try { return mk.parse(text, { gfm: true, breaks: true }); } catch(e) { return mk.parse(text); }
+  let html;
+  try { html = mk.parse(text, { gfm: true, breaks: true }); } catch(e) { html = mk.parse(text); }
+  return html;
+}
+
+// Рендеринг LaTeX у DOM-елементі за допомогою KaTeX auto-render
+function renderLatexInElement(el) {
+  if (!el) return;
+  const renderMath = window.renderMathInElement;
+  if (typeof renderMath !== 'function') return;
+  try {
+    renderMath(el, {
+      delimiters: [
+        { left: '$$', right: '$$', display: true },
+        { left: '$',  right: '$',  display: false },
+        { left: '\\[', right: '\\]', display: true },
+        { left: '\\(', right: '\\)', display: false }
+      ],
+      throwOnError: false,
+      errorColor: '#cc0000'
+    });
+  } catch(e) { /* ігноруємо помилки парсингу */ }
 }
 
 function pageToHtml(page) {
@@ -1105,7 +1126,7 @@ function applyEditorFormat(fmt, content) {
   const prev  = document.getElementById('editor-preview');
   const fbar  = document.getElementById('format-bar');
   plain.classList.add('hidden'); rich.classList.add('hidden'); prev.classList.add('hidden'); fbar.classList.add('hidden');
-  if (fmt === 'rich') { rich.classList.remove('hidden'); fbar.classList.remove('hidden'); rich.innerHTML = content; }
+  if (fmt === 'rich') { rich.classList.remove('hidden'); fbar.classList.remove('hidden'); rich.innerHTML = content; renderLatexInElement(rich); }
   else { plain.classList.remove('hidden'); plain.value = content; }
 }
 
@@ -1165,6 +1186,7 @@ function togglePreview() {
     else html = '<pre style="white-space:pre-wrap">' + c.replace(/</g,'&lt;') + '</pre>';
     prev.innerHTML = html;
     plain.classList.add('hidden'); rich.classList.add('hidden'); prev.classList.remove('hidden');
+    renderLatexInElement(prev);
     if (ico) ico.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
     previewActive = true;
   } else {
