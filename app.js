@@ -1026,7 +1026,7 @@ function exportBranchPDFFallback(id, pages) {
       content + '\n';
   });
 
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${pages[0]?.title || 'export'}</title><style>${styles}</style></head><body>${body}<script>window.onload=function(){setTimeout(function(){window.print();},300);}<\/script></body></html>`;
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${pages[0]?.title || 'export'}</title><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css"><style>${styles}</style></head><body>${body}<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"><\/script><script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"><\/script><script>window.onload=function(){if(typeof renderMathInElement==='function'){renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\\\[',right:'\\\\]',display:true},{left:'\\\\(',right:'\\\\)',display:false}],throwOnError:false});}setTimeout(function(){window.print();},600);};<\/script></body></html>`;
 
   // window.open працює на всіх платформах (включно iOS/Android Safari).
   // iframe.print() на мобільних Safari друкує батьківський viewport.
