@@ -932,9 +932,12 @@ function markedParse(text) {
   if (!mk) return text.replace(/\n/g, '<br>');
   // gfm: GitHub Flavored Markdown (таблиці, списки без порожнього рядка перед ними)
   // breaks: одиночний \n → <br> (як у більшості редакторів)
+  // Видаляємо <br> з рядків таблиці, щоб вони коректно рендерились
+  const placeholder = '\x02BR\x03';
+  const processed = text.replace(/^(\|.+)$/gm, line => line.replace(/<br\s*\/?>/gi, placeholder));
   let html;
-  try { html = mk.parse(text, { gfm: true, breaks: true }); } catch(e) { html = mk.parse(text); }
-  return html;
+  try { html = mk.parse(processed, { gfm: true, breaks: true }); } catch(e) { html = mk.parse(processed); }
+  return html.replace(new RegExp(placeholder, 'g'), '<br>');
 }
 
 // Рендеринг LaTeX у DOM-елементі за допомогою KaTeX auto-render
