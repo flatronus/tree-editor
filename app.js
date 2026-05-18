@@ -934,11 +934,58 @@ function markedParse(text) {
   // breaks: одиночний \n → <br> (як у більшості редакторів)
   // Видаляємо <br> з рядків таблиці, щоб вони коректно рендерились
   const PH = '\x02BR\x03';
-  // Склеюємо рядки таблиці: якщо рядок із | переривається на \n (але наступний рядок не | і не ---),
-  // то це продовження клітинки — приклеюємо його плейсхолдером
-  const joined = text.replace(/(\|[^\n]+)\n(?!\n|\||:?-)/g, (_, line) => line + PH);
-  // Замінюємо <br> що залишились у рядках таблиці
-  const processed = joined.replace(/^(\|.+)$/gm, line => line.replace(/<br\s*\/?>/gi, PH));
+  // Текст таблиці має рядки | ... | що можуть містити <br>\n\n між ними.
+  // Це ламає парсер — він бачить розрив абзацу і не розуміє що це одна клітинка.
+  // Рішення: знаходимо в тексті будь-який <br> + наступні \n і замінюємо на PH,
+  // але ТІЛЬКИ всередині блоків таблиці.
+  // Блок таблиці — це послідовність рядків що починаються з | (навіть якщо розділені \n\n через <br>).
+  // Алгоритм: розбиваємо текст на сегменти, знаходимо таблиці, обробляємо їх.
+  const processed = (() => {
+    // Замінюємо <br> + \n* між рядками таблиці.
+    // Ознака рядка таблиці: починається (після можливих пробілів) з |
+    // Ознака що ми "в таблиці": попередній непорожній рядок теж починався з |
+    const lines = text.split('\n');
+    const out = [];
+    let inTable = false;
+    let tableBuffer = [];
+
+    const flushTable = () => {
+      if (tableBuffer.length === 0) return;
+      const raw = tableBuffer.join('\n');
+      // Замінюємо \n*<br>\n* → PH в одному regex
+      out.push(raw.replace(/\n*<br\s*\/?>/gi, PH));
+      tableBuffer = [];
+      inTable = false;
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const isTableRow = /^\s*\|/.test(line);
+
+      if (isTableRow) {
+        if (!inTable) inTable = true;
+        tableBuffer.push(line);
+      } else if (inTable) {
+        // Якщо далі ще є рядки таблиці — цей рядок є частиною клітинки (продовження після <br>\n)
+        // Рядок є частиною клітинки якщо:
+        // 1. Далі ще є рядки/фрагменти таблиці (рядки з |), АБО
+        // 2. Поточний рядок містить | (продовження останньої клітинки)
+        const remaining = lines.slice(i + 1);
+        const moreTable = remaining.some(l => /^\s*\|/.test(l) || l.includes('|'));
+        const isTableContinuation = moreTable || line.includes('|');
+        if (isTableContinuation) {
+          tableBuffer.push(line);
+        } else {
+          flushTable();
+          out.push(line);
+        }
+      } else {
+        out.push(line);
+      }
+    }
+    if (inTable) flushTable();
+    return out.join('\n');
+  })();
   let html;
   try { html = mk.parse(processed, { gfm: true, breaks: true }); } catch(e) { html = mk.parse(processed); }
   return html.replace(new RegExp(PH, 'g'), '<br>');
