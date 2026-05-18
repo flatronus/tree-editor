@@ -933,11 +933,15 @@ function markedParse(text) {
   // gfm: GitHub Flavored Markdown (таблиці, списки без порожнього рядка перед ними)
   // breaks: одиночний \n → <br> (як у більшості редакторів)
   // Видаляємо <br> з рядків таблиці, щоб вони коректно рендерились
-  const placeholder = '\x02BR\x03';
-  const processed = text.replace(/^(\|.+)$/gm, line => line.replace(/<br\s*\/?>/gi, placeholder));
+  const PH = '\x02BR\x03';
+  // Склеюємо рядки таблиці: якщо рядок із | переривається на \n (але наступний рядок не | і не ---),
+  // то це продовження клітинки — приклеюємо його плейсхолдером
+  const joined = text.replace(/(\|[^\n]+)\n(?!\n|\||:?-)/g, (_, line) => line + PH);
+  // Замінюємо <br> що залишились у рядках таблиці
+  const processed = joined.replace(/^(\|.+)$/gm, line => line.replace(/<br\s*\/?>/gi, PH));
   let html;
   try { html = mk.parse(processed, { gfm: true, breaks: true }); } catch(e) { html = mk.parse(processed); }
-  return html.replace(new RegExp(placeholder, 'g'), '<br>');
+  return html.replace(new RegExp(PH, 'g'), '<br>');
 }
 
 // Рендеринг LaTeX у DOM-елементі за допомогою KaTeX auto-render
