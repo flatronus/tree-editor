@@ -988,7 +988,14 @@ function markedParse(text) {
   })();
   let html;
   try { html = mk.parse(processed, { gfm: true, breaks: true }); } catch(e) { html = mk.parse(processed); }
-  return html.replace(new RegExp(PH, 'g'), '<br>');
+  html = html.replace(new RegExp(PH, 'g'), '<br>');
+  // Рендеримо ```svg блоки як інлайн SVG
+  html = html.replace(/<pre><code class="language-svg">([\s\S]*?)<\/code><\/pre>/gi, (_, svgEncoded) => {
+    const svgCode = svgEncoded
+      .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+    return `<div class="svg-block">${svgCode}</div>`;
+  });
+  return html;
 }
 
 // Рендеринг LaTeX у DOM-елементі за допомогою KaTeX auto-render
@@ -1435,9 +1442,16 @@ document.getElementById('file-input').addEventListener('change', e => {
   reader.onload = ev => {
     const parentId = state.activeId || ROOT_ID;
     const p = createPage(parentId);
-    p.content = ev.target.result; p.title = file.name.replace(/\.[^.]+$/, '');
+    p.title = file.name.replace(/\.[^.]+$/, '');
     const ext = file.name.split('.').pop().toLowerCase();
-    p.format = ext === 'md' ? 'markdown' : ext === 'html' ? 'rich' : 'auto';
+    if (ext === 'svg') {
+      // SVG вставляємо як огорожений блок у markdown
+      p.content = '```svg\n' + ev.target.result + '\n```';
+      p.format = 'markdown';
+    } else {
+      p.content = ev.target.result;
+      p.format = ext === 'md' ? 'markdown' : ext === 'html' ? 'rich' : 'auto';
+    }
     p.updatedAt = Date.now();
     expandState[parentId] = true; saveState(); fbQueueWrite(p); flushWriteQueue(); renderTree(); openPage(p.id);
   };

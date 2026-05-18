@@ -740,3 +740,20 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
   #emoji-panel { right: 4px; width: calc(100vw - 8px); max-height: 300px; }
   #emoji-grid { grid-template-columns: repeat(9, 1fr); }
 }
+
+/* ── SVG блоки в preview ───────────────────────────────── */
+.svg-block {
+  display: block;
+  margin: 12px 0;
+  padding: 12px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: auto;
+  max-width: 100%;
+  text-align: center;
+}
+.svg-block svg {
+  max-width: 100%;
+  height: auto;
+}
