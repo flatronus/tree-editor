@@ -1042,9 +1042,10 @@ function exportBranchPDFFallback(id, pages) {
     code{font-family:monospace;background:#f1f5f9;padding:1pt 3pt;border-radius:2pt}
     .sep{border:none;border-top:1pt solid #e2e8f0;margin:10pt 0}
     .crumb{font-size:8pt;color:#94a3b8;margin-bottom:2pt;font-family:monospace}
+    *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
     table{border-collapse:collapse;width:100%;margin:6pt 0;font-size:10pt}
-    th,td{border:1pt solid #94a3b8;padding:4pt 8pt;text-align:left;vertical-align:top}
-    th{background:#f1f5f9;font-weight:700;color:#1a1a2e}
+    th,td{border:1pt solid #333;padding:4pt 8pt;text-align:left;vertical-align:top}
+    th{background:#e8ecf0;font-weight:700;color:#1a1a2e}
     tr:nth-child(even) td{background:#f8fafc}
   `;
   // Рендеримо markdown ТУТ у батьківському вікні (доступ до window.marked).
