@@ -366,6 +366,7 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 #editor-preview th { background: var(--bg3); color: var(--accent2); font-weight: 500; }
 #editor-preview pre { background: var(--bg3); padding: 12px 16px; border-radius: var(--radius); overflow-x: auto; margin: .8em 0; border: 1px solid var(--border); }
 #editor-preview pre code { background: none; padding: 0; font-size: 13px; color: var(--text); }
+#editor-preview .math-pre { font-family: var(--font-mono); font-size: 13px; background: var(--bg3); padding: 12px 16px; border-radius: var(--radius); overflow-x: auto; margin: .8em 0; border: 1px solid var(--border); white-space: pre; line-height: 1.6; }
 
 /* statusbar */
 #editor-statusbar {
@@ -739,21 +740,4 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 @media (max-width: 700px) {
   #emoji-panel { right: 4px; width: calc(100vw - 8px); max-height: 300px; }
   #emoji-grid { grid-template-columns: repeat(9, 1fr); }
-}
-
-/* ── SVG блоки в preview ───────────────────────────────── */
-.svg-block {
-  display: block;
-  margin: 12px 0;
-  padding: 12px;
-  background: var(--bg2);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: auto;
-  max-width: 100%;
-  text-align: center;
-}
-.svg-block svg {
-  max-width: 100%;
-  height: auto;
 }

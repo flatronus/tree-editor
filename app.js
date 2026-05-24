@@ -994,7 +994,7 @@ function markedParse(text) {
   const processedFences = processed.replace(/^```([^\n]*)\n([\s\S]*?)^```/gm, (_, lang, body) => {
     const hasMath = /\$/.test(body);
     if (hasMath) {
-      fenceStore.push(`<pre class="math-pre"><code>${body}</code></pre>`);
+      fenceStore.push(`<div class="math-pre">${body}</div>`);
     } else {
       const escaped = body.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       fenceStore.push(`<pre><code>${escaped}</code></pre>`);
