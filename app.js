@@ -1589,6 +1589,7 @@ document.getElementById('btn-new-sibling').addEventListener('click', () => {
     } else {
       parent.children.push(p.id);
     }
+    saveState(); // зберігаємо новий порядок локально
   }
 
   renderTree();
