@@ -1563,6 +1563,39 @@ document.getElementById('btn-new-page').addEventListener('click', () => {
 });
 document.getElementById('btn-create-first').addEventListener('click', () => document.getElementById('btn-new-page').click());
 
+document.getElementById('btn-new-sibling').addEventListener('click', () => {
+  if (!state.activeId || state.activeId === ROOT_ID || state.activeId === TRASH_ID) {
+    // Немає виділеного — поводимось як btn-new-page
+    document.getElementById('btn-new-page').click();
+    return;
+  }
+  if (unsaved && state.activeId) saveCurrentEditorToPage();
+  unsaved = false;
+
+  const activePage = state.pages[state.activeId];
+  if (!activePage) return;
+  const parentId = activePage.parentId || ROOT_ID;
+
+  const p = createPage(parentId);
+
+  // Вставляємо новий пункт одразу після активного в масиві children батька
+  const parent = state.pages[parentId];
+  if (parent && Array.isArray(parent.children)) {
+    // createPage вже додав id в кінець — переставляємо
+    parent.children = parent.children.filter(c => c !== p.id);
+    const idx = parent.children.indexOf(state.activeId);
+    if (idx !== -1) {
+      parent.children.splice(idx + 1, 0, p.id);
+    } else {
+      parent.children.push(p.id);
+    }
+  }
+
+  renderTree();
+  openPage(p.id);
+  setTimeout(() => document.getElementById('page-title').select(), 60);
+});
+
 function autoResizeTitle() {
   const el = document.getElementById('page-title');
   if (!el) return;
