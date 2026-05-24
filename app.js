@@ -1016,6 +1016,7 @@ function renderLatexInElement(el) {
         { left: '\\[', right: '\\]', display: true },
         { left: '\\(', right: '\\)', display: false }
       ],
+      ignoredTags: [],
       throwOnError: false,
       errorColor: '#cc0000'
     });
