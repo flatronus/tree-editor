@@ -986,15 +986,20 @@ function markedParse(text) {
     if (inTable) flushTable();
     return out.join('\n');
   })();
+  // Захищаємо LaTeX-вирази від обробки marked ($$...$$ та $...$)
+  const mathStore = [];
+  const mathPlaceholder = (i) => `\x01MATH${i}\x01`;
+  const protectedText = processed
+    // спочатку блочні $$ ... $$
+    .replace(/\$\$([\s\S]+?)\$\$/g, (_, m) => { mathStore.push('$$' + m + '$$'); return mathPlaceholder(mathStore.length - 1); })
+    // потім inline $ ... $ (не допускаємо вкладення)
+    .replace(/\$([^\$\n]+?)\$/g, (_, m) => { mathStore.push('$' + m + '$'); return mathPlaceholder(mathStore.length - 1); });
+
   let html;
-  try { html = mk.parse(processed, { gfm: true, breaks: true }); } catch(e) { html = mk.parse(processed); }
+  try { html = mk.parse(protectedText, { gfm: true, breaks: true }); } catch(e) { html = mk.parse(protectedText); }
+  // Відновлюємо math-вирази та <br>
   html = html.replace(new RegExp(PH, 'g'), '<br>');
-  // Рендеримо ```svg блоки як інлайн SVG
-  html = html.replace(/<pre><code class="language-svg">([\s\S]*?)<\/code><\/pre>/gi, (_, svgEncoded) => {
-    const svgCode = svgEncoded
-      .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
-    return `<div class="svg-block">${svgCode}</div>`;
-  });
+  html = html.replace(/\x01MATH(\d+)\x01/g, (_, i) => mathStore[+i]);
   return html;
 }
 
@@ -1442,16 +1447,9 @@ document.getElementById('file-input').addEventListener('change', e => {
   reader.onload = ev => {
     const parentId = state.activeId || ROOT_ID;
     const p = createPage(parentId);
-    p.title = file.name.replace(/\.[^.]+$/, '');
+    p.content = ev.target.result; p.title = file.name.replace(/\.[^.]+$/, '');
     const ext = file.name.split('.').pop().toLowerCase();
-    if (ext === 'svg') {
-      // SVG вставляємо як огорожений блок у markdown
-      p.content = '```svg\n' + ev.target.result + '\n```';
-      p.format = 'markdown';
-    } else {
-      p.content = ev.target.result;
-      p.format = ext === 'md' ? 'markdown' : ext === 'html' ? 'rich' : 'auto';
-    }
+    p.format = ext === 'md' ? 'markdown' : ext === 'html' ? 'rich' : 'auto';
     p.updatedAt = Date.now();
     expandState[parentId] = true; saveState(); fbQueueWrite(p); flushWriteQueue(); renderTree(); openPage(p.id);
   };
