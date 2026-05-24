@@ -986,20 +986,36 @@ function markedParse(text) {
     if (inTable) flushTable();
     return out.join('\n');
   })();
-  // Захищаємо LaTeX-вирази від обробки marked ($$...$$ та $...$)
+  // Перехоплюємо fenced code blocks (``` ... ```) ДО marked:
+  // якщо блок містить $...$ — рендеримо як <pre class="math-pre"> де вміст не екранується,
+  // щоб KaTeX міг потім знайти і відрендерити формули.
+  const fenceStore = [];
+  const fencePH = (i) => `\x01FENCE${i}\x01`;
+  const processedFences = processed.replace(/^```([^\n]*)\n([\s\S]*?)^```/gm, (_, lang, body) => {
+    const hasMath = /\$/.test(body);
+    if (hasMath) {
+      fenceStore.push(`<pre class="math-pre"><code>${body}</code></pre>`);
+    } else {
+      const escaped = body.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      fenceStore.push(`<pre><code>${escaped}</code></pre>`);
+    }
+    return fencePH(fenceStore.length - 1);
+  });
+
+  // Захищаємо inline $...$ та блочні $$...$$ від marked
   const mathStore = [];
-  const mathPlaceholder = (i) => `\x01MATH${i}\x01`;
-  const protectedText = processed
-    // спочатку блочні $$ ... $$
-    .replace(/\$\$([\s\S]+?)\$\$/g, (_, m) => { mathStore.push('$$' + m + '$$'); return mathPlaceholder(mathStore.length - 1); })
-    // потім inline $ ... $ (не допускаємо вкладення)
-    .replace(/\$([^\$\n]+?)\$/g, (_, m) => { mathStore.push('$' + m + '$'); return mathPlaceholder(mathStore.length - 1); });
+  const mathPH = (i) => `\x01MATH${i}\x01`;
+  const protectedText = processedFences
+    .replace(/\$\$([\s\S]+?)\$\$/g, (_, m) => { mathStore.push('$$' + m + '$$'); return mathPH(mathStore.length - 1); })
+    .replace(/\$([^\$\n]+?)\$/g,    (_, m) => { mathStore.push('$' + m + '$');   return mathPH(mathStore.length - 1); });
 
   let html;
   try { html = mk.parse(protectedText, { gfm: true, breaks: true }); } catch(e) { html = mk.parse(protectedText); }
-  // Відновлюємо math-вирази та <br>
+  // Відновлюємо <br>, math та fence блоки
   html = html.replace(new RegExp(PH, 'g'), '<br>');
   html = html.replace(/\x01MATH(\d+)\x01/g, (_, i) => mathStore[+i]);
+  html = html.replace(/\x01FENCE(\d+)\x01/g, (_, i) => fenceStore[+i]);
+  html = html.replace(/<p>\s*(<pre[\s\S]*?<\/pre>)\s*<\/p>/g, '$1');
   return html;
 }
 
