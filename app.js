@@ -763,9 +763,12 @@ function renderTree() {
     const page = state.pages[id]; if (!page) return null;
     const children = page.children || [];
     const hasKids = children.length > 0;
-    const matchTitle = page.title.toLowerCase().includes(q);
+    const matchTitle = q ? page.title.toLowerCase().includes(q) : false;
+    // Пошук по вмісту: знімаємо HTML-теги для rich/markdown форматів
+    const rawContent = (page.content || '').replace(/<[^>]*>/g, ' ').toLowerCase();
+    const matchContent = q ? rawContent.includes(q) : false;
     const childNodes = children.map(c => buildNode(c, depth + 1, inTrash)).filter(Boolean);
-    if (q && !matchTitle && !childNodes.length) return null;
+    if (q && !matchTitle && !matchContent && !childNodes.length) return null;
 
     const item = document.createElement('div');
     item.className = 'tree-item';
@@ -816,14 +819,57 @@ function renderTree() {
     const label = document.createElement('span');
     label.className = 'tree-label';
     const pageIdx = indexMap.get(id);
+
+    // Функція підсвітки знайденого тексту
+    function highlightText(text, query) {
+      if (!query) return document.createTextNode(text);
+      const idx = text.toLowerCase().indexOf(query);
+      if (idx === -1) return document.createTextNode(text);
+      const frag = document.createDocumentFragment();
+      frag.appendChild(document.createTextNode(text.slice(0, idx)));
+      const mark = document.createElement('mark');
+      mark.className = 'search-highlight';
+      mark.textContent = text.slice(idx, idx + query.length);
+      frag.appendChild(mark);
+      frag.appendChild(document.createTextNode(text.slice(idx + query.length)));
+      return frag;
+    }
+
     if (pageIdx) {
       const idxSpan = document.createElement('span');
       idxSpan.className = 'tree-page-index';
       idxSpan.textContent = pageIdx + ' ';
       label.appendChild(idxSpan);
-      label.appendChild(document.createTextNode(page.title));
+      label.appendChild(highlightText(page.title, q));
     } else {
-      label.textContent = page.title;
+      label.appendChild(highlightText(page.title, q));
+    }
+
+    // Якщо знайдено у вмісті (але не в назві), показуємо фрагмент
+    if (q && matchContent && !matchTitle) {
+      const rawContent = (page.content || '').replace(/<[^>]*>/g, ' ');
+      const lc = rawContent.toLowerCase();
+      const pos = lc.indexOf(q);
+      if (pos !== -1) {
+        const start = Math.max(0, pos - 30);
+        const end = Math.min(rawContent.length, pos + q.length + 50);
+        let snippet = (start > 0 ? '…' : '') + rawContent.slice(start, end).trim() + (end < rawContent.length ? '…' : '');
+        const snippetEl = document.createElement('div');
+        snippetEl.className = 'search-snippet';
+        const snipLc = snippet.toLowerCase();
+        const snipPos = snipLc.indexOf(q);
+        if (snipPos !== -1) {
+          snippetEl.appendChild(document.createTextNode(snippet.slice(0, snipPos)));
+          const snipMark = document.createElement('mark');
+          snipMark.className = 'search-highlight';
+          snipMark.textContent = snippet.slice(snipPos, snipPos + q.length);
+          snippetEl.appendChild(snipMark);
+          snippetEl.appendChild(document.createTextNode(snippet.slice(snipPos + q.length)));
+        } else {
+          snippetEl.textContent = snippet;
+        }
+        label.appendChild(snippetEl);
+      }
     }
 
     row.append(toggle, icon, label);

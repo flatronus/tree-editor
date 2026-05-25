@@ -741,3 +741,27 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
   #emoji-panel { right: 4px; width: calc(100vw - 8px); max-height: 300px; }
   #emoji-grid { grid-template-columns: repeat(9, 1fr); }
 }
+
+/* ── Search highlight & snippet ────────────────────────────── */
+mark.search-highlight {
+  background: #f5c518;
+  color: #1a1a2e;
+  border-radius: 2px;
+  padding: 0 1px;
+  font-weight: 600;
+}
+.search-snippet {
+  font-size: 11px;
+  color: var(--fg3);
+  line-height: 1.4;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  font-style: italic;
+}
+.search-snippet mark.search-highlight {
+  font-weight: 700;
+  background: #f5c518cc;
+}
