@@ -823,16 +823,20 @@ function renderTree() {
     // Функція підсвітки знайденого тексту
     function highlightText(text, query) {
       if (!query) return document.createTextNode(text);
-      const idx = text.toLowerCase().indexOf(query);
-      if (idx === -1) return document.createTextNode(text);
+      const lc = text.toLowerCase();
       const frag = document.createDocumentFragment();
-      frag.appendChild(document.createTextNode(text.slice(0, idx)));
-      const mark = document.createElement('mark');
-      mark.className = 'search-highlight';
-      mark.textContent = text.slice(idx, idx + query.length);
-      frag.appendChild(mark);
-      frag.appendChild(document.createTextNode(text.slice(idx + query.length)));
-      return frag;
+      let cursor = 0;
+      let idx;
+      while ((idx = lc.indexOf(query, cursor)) !== -1) {
+        if (idx > cursor) frag.appendChild(document.createTextNode(text.slice(cursor, idx)));
+        const mark = document.createElement('mark');
+        mark.className = 'search-highlight';
+        mark.textContent = text.slice(idx, idx + query.length);
+        frag.appendChild(mark);
+        cursor = idx + query.length;
+      }
+      if (cursor < text.length) frag.appendChild(document.createTextNode(text.slice(cursor)));
+      return frag.childNodes.length ? frag : document.createTextNode(text);
     }
 
     if (pageIdx) {
@@ -856,18 +860,7 @@ function renderTree() {
         let snippet = (start > 0 ? '…' : '') + rawContent.slice(start, end).trim() + (end < rawContent.length ? '…' : '');
         const snippetEl = document.createElement('div');
         snippetEl.className = 'search-snippet';
-        const snipLc = snippet.toLowerCase();
-        const snipPos = snipLc.indexOf(q);
-        if (snipPos !== -1) {
-          snippetEl.appendChild(document.createTextNode(snippet.slice(0, snipPos)));
-          const snipMark = document.createElement('mark');
-          snipMark.className = 'search-highlight';
-          snipMark.textContent = snippet.slice(snipPos, snipPos + q.length);
-          snippetEl.appendChild(snipMark);
-          snippetEl.appendChild(document.createTextNode(snippet.slice(snipPos + q.length)));
-        } else {
-          snippetEl.textContent = snippet;
-        }
+        snippetEl.appendChild(highlightText(snippet, q));
         label.appendChild(snippetEl);
       }
     }
