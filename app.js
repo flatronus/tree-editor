@@ -1049,7 +1049,7 @@ function markedParse(text) {
   const processedFences = processed.replace(/^```([^\n]*)\n([\s\S]*?)^```/gm, (_, lang, body) => {
     const langTrim = lang.trim().toLowerCase();
     // SVG блок — рендеруємо як живу картинку
-    if (langTrim === 'svg' || (!langTrim && /^\s*<svg[\s>]/i.test(body))) {
+    if (langTrim === 'svg' || /^\s*<svg[\s>]/i.test(body)) {
       fenceStore.push(`<div class="svg-preview">${body.trim()}</div>`);
     } else if (/\$/.test(body)) {
       fenceStore.push(`<div class="math-pre">${body}</div>`);
