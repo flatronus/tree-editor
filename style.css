@@ -367,6 +367,8 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 #editor-preview pre { background: var(--bg3); padding: 12px 16px; border-radius: var(--radius); overflow-x: auto; margin: .8em 0; border: 1px solid var(--border); }
 #editor-preview pre code { background: none; padding: 0; font-size: 13px; color: var(--text); }
 #editor-preview .math-pre { font-family: var(--font-mono); font-size: 13px; background: var(--bg3); padding: 12px 16px; border-radius: var(--radius); overflow-x: auto; margin: .8em 0; border: 1px solid var(--border); white-space: pre; line-height: 1.6; }
+#editor-preview .svg-preview { margin: .8em 0; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); background: var(--bg3); line-height: 0; }
+#editor-preview .svg-preview svg { max-width: 100%; height: auto; display: block; }
 
 /* statusbar */
 #editor-statusbar {
