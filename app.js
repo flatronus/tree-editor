@@ -763,9 +763,12 @@ function renderTree() {
     const page = state.pages[id]; if (!page) return null;
     const children = page.children || [];
     const hasKids = children.length > 0;
-    const matchTitle = page.title.toLowerCase().includes(q);
+    const matchTitle = q ? page.title.toLowerCase().includes(q) : false;
+    // Пошук по вмісту: знімаємо HTML-теги для rich/markdown форматів
+    const rawContent = (page.content || '').replace(/<[^>]*>/g, ' ').toLowerCase();
+    const matchContent = q ? rawContent.includes(q) : false;
     const childNodes = children.map(c => buildNode(c, depth + 1, inTrash)).filter(Boolean);
-    if (q && !matchTitle && !childNodes.length) return null;
+    if (q && !matchTitle && !matchContent && !childNodes.length) return null;
 
     const item = document.createElement('div');
     item.className = 'tree-item';
@@ -816,14 +819,50 @@ function renderTree() {
     const label = document.createElement('span');
     label.className = 'tree-label';
     const pageIdx = indexMap.get(id);
+
+    // Функція підсвітки знайденого тексту
+    function highlightText(text, query) {
+      if (!query) return document.createTextNode(text);
+      const lc = text.toLowerCase();
+      const frag = document.createDocumentFragment();
+      let cursor = 0;
+      let idx;
+      while ((idx = lc.indexOf(query, cursor)) !== -1) {
+        if (idx > cursor) frag.appendChild(document.createTextNode(text.slice(cursor, idx)));
+        const mark = document.createElement('mark');
+        mark.className = 'search-highlight';
+        mark.textContent = text.slice(idx, idx + query.length);
+        frag.appendChild(mark);
+        cursor = idx + query.length;
+      }
+      if (cursor < text.length) frag.appendChild(document.createTextNode(text.slice(cursor)));
+      return frag.childNodes.length ? frag : document.createTextNode(text);
+    }
+
     if (pageIdx) {
       const idxSpan = document.createElement('span');
       idxSpan.className = 'tree-page-index';
       idxSpan.textContent = pageIdx + ' ';
       label.appendChild(idxSpan);
-      label.appendChild(document.createTextNode(page.title));
+      label.appendChild(highlightText(page.title, q));
     } else {
-      label.textContent = page.title;
+      label.appendChild(highlightText(page.title, q));
+    }
+
+    // Якщо знайдено у вмісті (але не в назві), показуємо фрагмент
+    if (q && matchContent && !matchTitle) {
+      const rawContent = (page.content || '').replace(/<[^>]*>/g, ' ');
+      const lc = rawContent.toLowerCase();
+      const pos = lc.indexOf(q);
+      if (pos !== -1) {
+        const start = Math.max(0, pos - 30);
+        const end = Math.min(rawContent.length, pos + q.length + 50);
+        let snippet = (start > 0 ? '…' : '') + rawContent.slice(start, end).trim() + (end < rawContent.length ? '…' : '');
+        const snippetEl = document.createElement('div');
+        snippetEl.className = 'search-snippet';
+        snippetEl.appendChild(highlightText(snippet, q));
+        label.appendChild(snippetEl);
+      }
     }
 
     row.append(toggle, icon, label);
@@ -933,13 +972,6 @@ function markedParse(text) {
   // gfm: GitHub Flavored Markdown (таблиці, списки без порожнього рядка перед ними)
   // breaks: одиночний \n → <br> (як у більшості редакторів)
   // Видаляємо <br> з рядків таблиці, щоб вони коректно рендерились
-  // Захищаємо ```svg блоки від обробки (breaks, таблиці тощо)
-  const SVG_PH = [];
-  const textProtected = text.replace(/```svg([\s\S]*?)```/gi, (match, svgCode) => {
-    const idx = SVG_PH.length;
-    SVG_PH.push(svgCode);
-    return '\x01SVG' + idx + '\x01';
-  });
   const PH = '\x02BR\x03';
   // Текст таблиці має рядки | ... | що можуть містити <br>\n\n між ними.
   // Це ламає парсер — він бачить розрив абзацу і не розуміє що це одна клітинка.
@@ -951,10 +983,11 @@ function markedParse(text) {
     // Замінюємо <br> + \n* між рядками таблиці.
     // Ознака рядка таблиці: починається (після можливих пробілів) з |
     // Ознака що ми "в таблиці": попередній непорожній рядок теж починався з |
-    const lines = textProtected.split('\n');
+    const lines = text.split('\n');
     const out = [];
     let inTable = false;
     let tableBuffer = [];
+    let inFence = false;
 
     const flushTable = () => {
       if (tableBuffer.length === 0) return;
@@ -967,6 +1000,21 @@ function markedParse(text) {
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
+      // Відстежуємо чи ми всередині fenced code block
+      if (/^```/.test(line)) {
+        if (inFence) {
+          inFence = false;
+        } else {
+          inFence = true;
+          if (inTable) flushTable();
+        }
+        out.push(line);
+        continue;
+      }
+      if (inFence) {
+        out.push(line);
+        continue;
+      }
       const isTableRow = /^\s*\|/.test(line);
 
       if (isTableRow) {
@@ -993,15 +1041,36 @@ function markedParse(text) {
     if (inTable) flushTable();
     return out.join('\n');
   })();
-  let html;
-  try { html = mk.parse(processed, { gfm: true, breaks: true }); } catch(e) { html = mk.parse(processed); }
-  html = html.replace(new RegExp(PH, 'g'), '<br>');
-  // Повертаємо SVG блоки як інлайн SVG
-  html = html.replace(/\x01SVG(\d+)\x01/g, (_, idx) => {
-    return '<div class="svg-block">' + SVG_PH[parseInt(idx)] + '</div>';
+  // Перехоплюємо fenced code blocks (``` ... ```) ДО marked:
+  // якщо блок містить $...$ — рендеримо як <pre class="math-pre"> де вміст не екранується,
+  // щоб KaTeX міг потім знайти і відрендерити формули.
+  const fenceStore = [];
+  const fencePH = (i) => `\x01FENCE${i}\x01`;
+  const processedFences = processed.replace(/^```([^\n]*)\n([\s\S]*?)^```/gm, (_, lang, body) => {
+    const hasMath = /\$/.test(body);
+    if (hasMath) {
+      fenceStore.push(`<div class="math-pre">${body}</div>`);
+    } else {
+      const escaped = body.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      fenceStore.push(`<pre><code>${escaped}</code></pre>`);
+    }
+    return fencePH(fenceStore.length - 1);
   });
-  // Рендеримо ```svg блоки як інлайн SVG
 
+  // Захищаємо inline $...$ та блочні $$...$$ від marked
+  const mathStore = [];
+  const mathPH = (i) => `\x01MATH${i}\x01`;
+  const protectedText = processedFences
+    .replace(/\$\$([\s\S]+?)\$\$/g, (_, m) => { mathStore.push('$$' + m + '$$'); return mathPH(mathStore.length - 1); })
+    .replace(/\$([^\$\n]+?)\$/g,    (_, m) => { mathStore.push('$' + m + '$');   return mathPH(mathStore.length - 1); });
+
+  let html;
+  try { html = mk.parse(protectedText, { gfm: true, breaks: true }); } catch(e) { html = mk.parse(protectedText); }
+  // Відновлюємо <br>, math та fence блоки
+  html = html.replace(new RegExp(PH, 'g'), '<br>');
+  html = html.replace(/\x01MATH(\d+)\x01/g, (_, i) => mathStore[+i]);
+  html = html.replace(/\x01FENCE(\d+)\x01/g, (_, i) => fenceStore[+i]);
+  html = html.replace(/<p>\s*(<pre[\s\S]*?<\/pre>)\s*<\/p>/g, '$1');
   return html;
 }
 
@@ -1018,6 +1087,7 @@ function renderLatexInElement(el) {
         { left: '\\[', right: '\\]', display: true },
         { left: '\\(', right: '\\)', display: false }
       ],
+      ignoredTags: [],
       throwOnError: false,
       errorColor: '#cc0000'
     });
@@ -1449,16 +1519,9 @@ document.getElementById('file-input').addEventListener('change', e => {
   reader.onload = ev => {
     const parentId = state.activeId || ROOT_ID;
     const p = createPage(parentId);
-    p.title = file.name.replace(/\.[^.]+$/, '');
+    p.content = ev.target.result; p.title = file.name.replace(/\.[^.]+$/, '');
     const ext = file.name.split('.').pop().toLowerCase();
-    if (ext === 'svg') {
-      // SVG вставляємо як огорожений блок у markdown
-      p.content = '```svg\n' + ev.target.result + '\n```';
-      p.format = 'markdown';
-    } else {
-      p.content = ev.target.result;
-      p.format = ext === 'md' ? 'markdown' : ext === 'html' ? 'rich' : 'auto';
-    }
+    p.format = ext === 'md' ? 'markdown' : ext === 'html' ? 'rich' : 'auto';
     p.updatedAt = Date.now();
     expandState[parentId] = true; saveState(); fbQueueWrite(p); flushWriteQueue(); renderTree(); openPage(p.id);
   };
@@ -1554,6 +1617,40 @@ document.getElementById('btn-new-page').addEventListener('click', () => {
   setTimeout(() => document.getElementById('page-title').select(), 60);
 });
 document.getElementById('btn-create-first').addEventListener('click', () => document.getElementById('btn-new-page').click());
+
+document.getElementById('btn-new-sibling').addEventListener('click', () => {
+  if (!state.activeId || state.activeId === ROOT_ID || state.activeId === TRASH_ID) {
+    // Немає виділеного — поводимось як btn-new-page
+    document.getElementById('btn-new-page').click();
+    return;
+  }
+  if (unsaved && state.activeId) saveCurrentEditorToPage();
+  unsaved = false;
+
+  const activePage = state.pages[state.activeId];
+  if (!activePage) return;
+  const parentId = activePage.parentId || ROOT_ID;
+
+  const p = createPage(parentId);
+
+  // Вставляємо новий пункт одразу після активного в масиві children батька
+  const parent = state.pages[parentId];
+  if (parent && Array.isArray(parent.children)) {
+    // createPage вже додав id в кінець — переставляємо
+    parent.children = parent.children.filter(c => c !== p.id);
+    const idx = parent.children.indexOf(state.activeId);
+    if (idx !== -1) {
+      parent.children.splice(idx + 1, 0, p.id);
+    } else {
+      parent.children.push(p.id);
+    }
+    saveState(); // зберігаємо новий порядок локально
+  }
+
+  renderTree();
+  openPage(p.id);
+  setTimeout(() => document.getElementById('page-title').select(), 60);
+});
 
 function autoResizeTitle() {
   const el = document.getElementById('page-title');
