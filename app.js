@@ -1253,7 +1253,6 @@ function openPage(id) {
   if (activeFormat === 'markdown' && (page.content || '').trim()) {
     togglePreview();
   }
-  if (window.innerWidth <= 1024) setTimeout(updateTopbarHeight, 50);
 }
 
 function reloadEditorContent(page) {
@@ -1274,14 +1273,7 @@ function applyEditorFormat(fmt, content) {
   const fbar  = document.getElementById('format-bar');
   plain.classList.add('hidden'); rich.classList.add('hidden'); prev.classList.add('hidden'); fbar.classList.add('hidden');
   if (fmt === 'rich') { rich.classList.remove('hidden'); fbar.classList.remove('hidden'); rich.innerHTML = content; renderLatexInElement(rich); }
-  else {
-    plain.classList.remove('hidden'); plain.value = content;
-    // auto-grow на мобільних щоб textarea не скролилась сама
-    if (window.innerWidth <= 1024) {
-      plain.style.height = 'auto';
-      plain.style.height = plain.scrollHeight + 'px';
-    }
-  }
+  else { plain.classList.remove('hidden'); plain.value = content; }
 }
 
 function getEditorContent() {
@@ -1461,19 +1453,8 @@ function showModal(text, onConfirm) {
 //  SIDEBAR
 // ════════════════════════════════════════════════════════════
 function updateTopbarHeight() {
-  const root = document.documentElement;
-  const topbar   = document.getElementById('global-topbar');
-  const titlebar = document.getElementById('editor-titlebar');
-  const fbar     = document.getElementById('format-bar');
-  if (topbar)   root.style.setProperty('--topbar-actual-h', topbar.offsetHeight + 'px');
-  if (titlebar) root.style.setProperty('--titlebar-h',      titlebar.offsetHeight + 'px');
-  if (fbar)     root.style.setProperty('--formatbar-h',     fbar.offsetHeight + 'px');
-  // Додати клас has-formatbar якщо format-bar видимий
-  const wrap = document.getElementById('editor-wrap');
-  if (wrap) {
-    const fbarVisible = fbar && !fbar.classList.contains('hidden');
-    wrap.classList.toggle('has-formatbar', fbarVisible);
-  }
+  const h = document.getElementById('global-topbar').offsetHeight;
+  document.documentElement.style.setProperty('--topbar-actual-h', h + 'px');
 }
 function setSidebarOpen(open) {
   const sb = document.getElementById('sidebar');
@@ -1685,16 +1666,7 @@ document.getElementById('page-title').addEventListener('input', e => {
   unsaved = true; setSyncStatus('pending');
   autoResizeTitle();
 });
-document.getElementById('editor-plain').addEventListener('input', () => {
-  unsaved = true; setSyncStatus('pending'); updateWordCount();
-  if (state.pages[state.activeId]?.format === 'auto') updateStatusFormat(detectFormat(document.getElementById('editor-plain').value));
-  // auto-grow на мобільних (щоб скрол був у #editor-wrap, а не в textarea)
-  if (window.innerWidth <= 1024) {
-    const ta = document.getElementById('editor-plain');
-    ta.style.height = 'auto';
-    ta.style.height = ta.scrollHeight + 'px';
-  }
-});
+document.getElementById('editor-plain').addEventListener('input', () => { unsaved = true; setSyncStatus('pending'); updateWordCount(); if (state.pages[state.activeId]?.format === 'auto') updateStatusFormat(detectFormat(document.getElementById('editor-plain').value)); });
 document.getElementById('editor-rich').addEventListener('input', () => { unsaved = true; setSyncStatus('pending'); updateWordCount(); });
 document.getElementById('search-input').addEventListener('input', renderTree);
 

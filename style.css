@@ -491,90 +491,6 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 }
 
 @media (max-width: 1024px) {
-  /* ── Topbar: fixed, ніколи не рухається ── */
-  #global-topbar {
-    position: fixed !important;
-    top: 0; left: 0; right: 0;
-    z-index: 200;
-  }
-
-  /* ── Titlebar з заголовком: fixed під topbar ── */
-  #editor-titlebar {
-    position: fixed !important;
-    top: var(--topbar-actual-h, 44px);
-    left: 0; right: 0;
-    z-index: 190;
-    border-bottom: 2px solid var(--border);
-    box-shadow: 0 2px 6px rgba(0,0,0,.15);
-  }
-
-  /* ── Format bar: fixed під titlebar ── */
-  #format-bar {
-    position: fixed !important;
-    top: calc(var(--topbar-actual-h, 44px) + var(--titlebar-h, 50px));
-    left: 0; right: 0;
-    z-index: 189;
-  }
-
-  /* ── Body row: від низу topbar до кінця екрану ── */
-  #body-row {
-    position: fixed !important;
-    top: var(--topbar-actual-h, 44px);
-    left: 0; right: 0; bottom: 0;
-    overflow: hidden;
-  }
-
-  /* ── Editor area: заповнює все ── */
-  #editor-area { height: 100%; overflow: hidden; }
-
-  /* ── Editor wrap: скролиться, відступ зверху під fixed titlebar ── */
-  #editor-wrap {
-    height: 100%;
-    overflow-y: auto !important;
-    -webkit-overflow-scrolling: touch;
-    display: flex;
-    flex-direction: column;
-    /* відступ під fixed #editor-titlebar (і format-bar якщо видимий) */
-    padding-top: var(--titlebar-h, 50px);
-  }
-  /* коли format-bar видимий — додатковий відступ */
-  #editor-wrap.has-formatbar {
-    padding-top: calc(var(--titlebar-h, 50px) + var(--formatbar-h, 40px));
-  }
-
-  /* ── Editor container і текстові елементи: нормальний потік ── */
-  #editor-container {
-    position: static !important;
-    flex: 1;
-    overflow: visible !important;
-  }
-  #editor-plain {
-    position: static !important;
-    width: 100% !important;
-    height: auto !important;
-    min-height: 70vh;
-    overflow: hidden !important;
-    resize: none;
-    box-sizing: border-box;
-  }
-  #editor-rich {
-    position: static !important;
-    width: 100% !important;
-    height: auto !important;
-    min-height: 70vh;
-    overflow: visible !important;
-    box-sizing: border-box;
-  }
-  #editor-preview {
-    position: static !important;
-    width: 100% !important;
-    height: auto !important;
-    min-height: 70vh;
-    overflow: visible !important;
-    box-sizing: border-box;
-  }
-
-  /* ── Sidebar ── */
   #sidebar {
     position: fixed !important;
     top: var(--topbar-actual-h, var(--topbar-h)) !important;
@@ -589,6 +505,7 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
   #sidebar.mobile-open { transform: translateX(0) !important; }
   #sidebar-resizer { display: none; }
 
+  /* Backdrop overlay when sidebar is open */
   #sidebar-backdrop {
     display: block;
     position: fixed;
@@ -600,7 +517,10 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
     pointer-events: none;
     transition: opacity .22s ease;
   }
-  #sidebar-backdrop.visible { opacity: 1; pointer-events: auto; }
+  #sidebar-backdrop.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 @media (max-width: 700px) {
