@@ -1253,6 +1253,7 @@ function openPage(id) {
   if (activeFormat === 'markdown' && (page.content || '').trim()) {
     togglePreview();
   }
+  if (window.innerWidth <= 1024) setTimeout(updateTopbarHeight, 50);
 }
 
 function reloadEditorContent(page) {
@@ -1460,8 +1461,19 @@ function showModal(text, onConfirm) {
 //  SIDEBAR
 // ════════════════════════════════════════════════════════════
 function updateTopbarHeight() {
-  const h = document.getElementById('global-topbar').offsetHeight;
-  document.documentElement.style.setProperty('--topbar-actual-h', h + 'px');
+  const root = document.documentElement;
+  const topbar   = document.getElementById('global-topbar');
+  const titlebar = document.getElementById('editor-titlebar');
+  const fbar     = document.getElementById('format-bar');
+  if (topbar)   root.style.setProperty('--topbar-actual-h', topbar.offsetHeight + 'px');
+  if (titlebar) root.style.setProperty('--titlebar-h',      titlebar.offsetHeight + 'px');
+  if (fbar)     root.style.setProperty('--formatbar-h',     fbar.offsetHeight + 'px');
+  // Додати клас has-formatbar якщо format-bar видимий
+  const wrap = document.getElementById('editor-wrap');
+  if (wrap) {
+    const fbarVisible = fbar && !fbar.classList.contains('hidden');
+    wrap.classList.toggle('has-formatbar', fbarVisible);
+  }
 }
 function setSidebarOpen(open) {
   const sb = document.getElementById('sidebar');
