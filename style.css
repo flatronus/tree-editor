@@ -491,6 +491,18 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 }
 
 @media (max-width: 1024px) {
+  /* Topbar — fixed, щоб не зникав при появі клавіатури */
+  #global-topbar {
+    position: fixed !important;
+    top: 0; left: 0; right: 0;
+    z-index: 200;
+  }
+
+  /* Body row отримує відступ рівний висоті topbar */
+  #body-row {
+    margin-top: var(--topbar-actual-h, var(--topbar-h));
+  }
+
   #sidebar {
     position: fixed !important;
     top: var(--topbar-actual-h, var(--topbar-h)) !important;

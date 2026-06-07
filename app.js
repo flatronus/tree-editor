@@ -1487,6 +1487,10 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 // Update topbar height on resize (for 2-row topbar on mobile)
 window.addEventListener('resize', updateTopbarHeight);
+// Also update when virtual keyboard appears/disappears (mobile)
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', updateTopbarHeight);
+}
 
 // Resize handle
 (function () {
