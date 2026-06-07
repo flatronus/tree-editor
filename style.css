@@ -491,16 +491,43 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 }
 
 @media (max-width: 1024px) {
-  /* Topbar — fixed, щоб не зникав при появі клавіатури */
+  /* ── Topbar: жорстко зверху, не прокручується ── */
   #global-topbar {
     position: fixed !important;
     top: 0; left: 0; right: 0;
     z-index: 200;
   }
 
-  /* Body row отримує відступ рівний висоті topbar */
-  #body-row {
+  /* ── Breadcrumb + Titlebar: fixed під topbar ── */
+  #breadcrumb-bar {
+    position: fixed !important;
+    top: var(--topbar-actual-h, var(--topbar-h));
+    left: 0; right: 0;
+    z-index: 190;
+  }
+  #editor-titlebar {
+    position: fixed !important;
+    top: calc(var(--topbar-actual-h, var(--topbar-h)) + var(--breadcrumb-h, 26px));
+    left: 0; right: 0;
+    z-index: 189;
+  }
+  #format-bar {
+    position: fixed !important;
+    top: calc(var(--topbar-actual-h, var(--topbar-h)) + var(--breadcrumb-h, 26px) + var(--titlebar-h, 46px));
+    left: 0; right: 0;
+    z-index: 188;
+  }
+
+  /* ── Editor area: відступ зверху під всі fixed блоки ── */
+  #editor-area {
     margin-top: var(--topbar-actual-h, var(--topbar-h));
+  }
+  #editor-wrap {
+    overflow: hidden;
+  }
+  #editor-container {
+    /* відступ зверху для контенту під fixed breadcrumb+titlebar */
+    padding-top: calc(var(--breadcrumb-h, 26px) + var(--titlebar-h, 46px));
   }
 
   #sidebar {
@@ -534,6 +561,7 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
     pointer-events: auto;
   }
 }
+
 
 @media (max-width: 700px) {
   #editor-plain, #editor-rich, #editor-preview { padding: 14px 16px; }
