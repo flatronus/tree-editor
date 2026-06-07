@@ -1253,7 +1253,6 @@ function openPage(id) {
   if (activeFormat === 'markdown' && (page.content || '').trim()) {
     togglePreview();
   }
-  if (window.innerWidth <= 1024) setTimeout(updateTopbarHeight, 50);
 }
 
 function reloadEditorContent(page) {
@@ -1276,10 +1275,12 @@ function applyEditorFormat(fmt, content) {
   if (fmt === 'rich') { rich.classList.remove('hidden'); fbar.classList.remove('hidden'); rich.innerHTML = content; renderLatexInElement(rich); }
   else {
     plain.classList.remove('hidden'); plain.value = content;
-    // auto-grow на мобільних щоб textarea не скролилась сама
+    // auto-grow на мобільних — після рендеру, бо до цього scrollHeight = 0
     if (window.innerWidth <= 1024) {
-      plain.style.height = 'auto';
-      plain.style.height = plain.scrollHeight + 'px';
+      setTimeout(() => {
+        plain.style.height = 'auto';
+        plain.style.height = plain.scrollHeight + 'px';
+      }, 0);
     }
   }
 }
@@ -1461,19 +1462,8 @@ function showModal(text, onConfirm) {
 //  SIDEBAR
 // ════════════════════════════════════════════════════════════
 function updateTopbarHeight() {
-  const root = document.documentElement;
-  const topbar   = document.getElementById('global-topbar');
-  const titlebar = document.getElementById('editor-titlebar');
-  const fbar     = document.getElementById('format-bar');
-  if (topbar)   root.style.setProperty('--topbar-actual-h', topbar.offsetHeight + 'px');
-  if (titlebar) root.style.setProperty('--titlebar-h',      titlebar.offsetHeight + 'px');
-  if (fbar)     root.style.setProperty('--formatbar-h',     fbar.offsetHeight + 'px');
-  // Додати клас has-formatbar якщо format-bar видимий
-  const wrap = document.getElementById('editor-wrap');
-  if (wrap) {
-    const fbarVisible = fbar && !fbar.classList.contains('hidden');
-    wrap.classList.toggle('has-formatbar', fbarVisible);
-  }
+  const h = document.getElementById('global-topbar').offsetHeight;
+  document.documentElement.style.setProperty('--topbar-actual-h', h + 'px');
 }
 function setSidebarOpen(open) {
   const sb = document.getElementById('sidebar');
