@@ -1253,6 +1253,8 @@ function openPage(id) {
   if (activeFormat === 'markdown' && (page.content || '').trim()) {
     togglePreview();
   }
+  // Оновити висоти fixed елементів після рендеру
+  setTimeout(updateTopbarHeight, 0);
 }
 
 function reloadEditorContent(page) {
@@ -1453,8 +1455,13 @@ function showModal(text, onConfirm) {
 //  SIDEBAR
 // ════════════════════════════════════════════════════════════
 function updateTopbarHeight() {
-  const h = document.getElementById('global-topbar').offsetHeight;
-  document.documentElement.style.setProperty('--topbar-actual-h', h + 'px');
+  const root = document.documentElement;
+  const topbar = document.getElementById('global-topbar');
+  const breadcrumb = document.getElementById('breadcrumb-bar');
+  const titlebar = document.getElementById('editor-titlebar');
+  if (topbar)     root.style.setProperty('--topbar-actual-h', topbar.offsetHeight + 'px');
+  if (breadcrumb) root.style.setProperty('--breadcrumb-h',    breadcrumb.offsetHeight + 'px');
+  if (titlebar)   root.style.setProperty('--titlebar-h',      titlebar.offsetHeight + 'px');
 }
 function setSidebarOpen(open) {
   const sb = document.getElementById('sidebar');
@@ -1487,10 +1494,6 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 // Update topbar height on resize (for 2-row topbar on mobile)
 window.addEventListener('resize', updateTopbarHeight);
-// Also update when virtual keyboard appears/disappears (mobile)
-if (window.visualViewport) {
-  window.visualViewport.addEventListener('resize', updateTopbarHeight);
-}
 
 // Resize handle
 (function () {
