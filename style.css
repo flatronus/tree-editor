@@ -491,14 +491,13 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 }
 
 @media (max-width: 1024px) {
-  /* Topbar — fixed, щоб не зникав при появі клавіатури */
+  /* Topbar — завжди зверху, навіть при появі клавіатури */
   #global-topbar {
     position: fixed !important;
     top: 0; left: 0; right: 0;
     z-index: 200;
   }
-
-  /* Body row отримує відступ рівний висоті topbar */
+  /* Компенсація висоти fixed topbar */
   #body-row {
     margin-top: var(--topbar-actual-h, var(--topbar-h));
   }
@@ -538,6 +537,77 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 @media (max-width: 700px) {
   #editor-plain, #editor-rich, #editor-preview { padding: 14px 16px; }
   #page-title { font-size: 18px; }
+}
+
+/* ══ MOBILE SCROLL FIX ══
+   На планшеті/телефоні при появі клавіатури браузер скролить window.
+   Щоб topbar і titlebar не зникали — переключаємо весь editor-wrap
+   на нормальний document flow (скрол через overflow-y на editor-wrap),
+   а editor-plain/rich/preview виходять з position:absolute.
+   editor-titlebar стає sticky під topbar. ══ */
+@media (max-width: 1024px) {
+  #editor-area { overflow: hidden; }
+
+  #editor-wrap {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #breadcrumb-bar {
+    position: sticky;
+    top: 0;
+    z-index: 11;
+  }
+
+  #editor-titlebar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  #format-bar {
+    position: sticky;
+    top: 0;
+    z-index: 9;
+  }
+
+  #editor-container {
+    overflow: visible;
+    position: static;
+    flex: none;
+  }
+
+  #editor-plain {
+    position: static;
+    width: 100%;
+    height: auto;
+    min-height: 60vh;
+    box-sizing: border-box;
+  }
+
+  #editor-rich {
+    position: static;
+    width: 100%;
+    height: auto;
+    min-height: 60vh;
+    overflow-y: visible;
+    box-sizing: border-box;
+  }
+
+  #editor-preview {
+    position: static;
+    width: 100%;
+    height: auto;
+    min-height: 60vh;
+    overflow-y: visible;
+    box-sizing: border-box;
+  }
+
+  #editor-statusbar {
+    position: sticky;
+    bottom: 0;
+    z-index: 10;
+  }
 }
 
 /* ══ PWA SAFE AREA ══ */
