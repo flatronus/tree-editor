@@ -1,5 +1,5 @@
 // ── Arkhiv Service Worker ──────────────────────────────────
-const CACHE_NAME = 'arkhiv-v6';
+const CACHE_NAME = 'arkhiv-v7';
 const STATIC_ASSETS = [
   './',
   './index.html',
