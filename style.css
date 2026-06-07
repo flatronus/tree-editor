@@ -491,43 +491,93 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 }
 
 @media (max-width: 1024px) {
-  /* ── Topbar: жорстко зверху, не прокручується ── */
+  /* Topbar — жорстко fixed, ніколи не рухається */
   #global-topbar {
     position: fixed !important;
     top: 0; left: 0; right: 0;
     z-index: 200;
   }
 
-  /* ── Breadcrumb + Titlebar: fixed під topbar ── */
-  #breadcrumb-bar {
+  /* body-row починається під topbar */
+  #body-row {
     position: fixed !important;
-    top: var(--topbar-actual-h, var(--topbar-h));
-    left: 0; right: 0;
-    z-index: 190;
-  }
-  #editor-titlebar {
-    position: fixed !important;
-    top: calc(var(--topbar-actual-h, var(--topbar-h)) + var(--breadcrumb-h, 26px));
-    left: 0; right: 0;
-    z-index: 189;
-  }
-  #format-bar {
-    position: fixed !important;
-    top: calc(var(--topbar-actual-h, var(--topbar-h)) + var(--breadcrumb-h, 26px) + var(--titlebar-h, 46px));
-    left: 0; right: 0;
-    z-index: 188;
+    top: var(--topbar-actual-h, 44px);
+    left: 0; right: 0; bottom: 0;
   }
 
-  /* ── Editor area: відступ зверху під всі fixed блоки ── */
+  /* editor-area займає весь простір */
   #editor-area {
-    margin-top: var(--topbar-actual-h, var(--topbar-h));
-  }
-  #editor-wrap {
+    height: 100%;
     overflow: hidden;
   }
+
+  /* editor-wrap — єдиний скролабельний контейнер */
+  #editor-wrap {
+    height: 100%;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* breadcrumb і titlebar — sticky всередині editor-wrap */
+  #breadcrumb-bar {
+    position: sticky !important;
+    top: 0;
+    z-index: 10;
+    flex-shrink: 0;
+  }
+  #editor-titlebar {
+    position: sticky !important;
+    top: 0;
+    z-index: 10;
+    flex-shrink: 0;
+  }
+  #format-bar {
+    position: sticky !important;
+    top: 0;
+    z-index: 9;
+    flex-shrink: 0;
+  }
+
+  /* editor-container і редактори — виходять з position:absolute */
   #editor-container {
-    /* відступ зверху для контенту під fixed breadcrumb+titlebar */
-    padding-top: calc(var(--breadcrumb-h, 26px) + var(--titlebar-h, 46px));
+    position: static !important;
+    flex: 1;
+    overflow: visible !important;
+    min-height: 0;
+  }
+  #editor-plain {
+    position: static !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 70vh;
+    overflow: hidden !important;
+    resize: none;
+    box-sizing: border-box;
+  }
+  #editor-rich {
+    position: static !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 70vh;
+    overflow: visible !important;
+    box-sizing: border-box;
+  }
+  #editor-preview {
+    position: static !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 70vh;
+    overflow: visible !important;
+    box-sizing: border-box;
+  }
+
+  #editor-statusbar {
+    position: sticky !important;
+    bottom: 0;
+    z-index: 10;
+    flex-shrink: 0;
   }
 
   #sidebar {
@@ -561,7 +611,6 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
     pointer-events: auto;
   }
 }
-
 
 @media (max-width: 700px) {
   #editor-plain, #editor-rich, #editor-preview { padding: 14px 16px; }
