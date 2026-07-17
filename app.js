@@ -930,6 +930,32 @@ document.getElementById('btn-expand-labels').addEventListener('click', () => {
 });
 
 // ════════════════════════════════════════════════════════════
+//  EXPAND / COLLAPSE ENTIRE TREE
+// ════════════════════════════════════════════════════════════
+function toggleTreeExpandCollapse() {
+  // Чи є десь (окрім кореня/корзини) згорнута гілка з дітьми?
+  const hasCollapsed = Object.values(state.pages).some(p =>
+    p && p.id !== ROOT_ID && p.id !== TRASH_ID &&
+    Array.isArray(p.children) && p.children.length > 0 &&
+    expandState[p.id] === false
+  );
+  if (hasCollapsed) {
+    // Розгорнути повністю все дерево
+    Object.keys(state.pages).forEach(id => { expandState[id] = true; });
+  } else {
+    // Згорнути дерево до кореневих заголовків першого порядку
+    Object.keys(state.pages).forEach(id => {
+      if (id !== ROOT_ID && id !== TRASH_ID) expandState[id] = false;
+    });
+    expandState[ROOT_ID] = true;
+    expandState[TRASH_ID] = true;
+  }
+  saveExpandState();
+  renderTree();
+}
+document.getElementById('btn-expand-collapse-tree').addEventListener('click', toggleTreeExpandCollapse);
+
+// ════════════════════════════════════════════════════════════
 //  PAGE ACTIONS POPUP
 // ════════════════════════════════════════════════════════════
 function showPageActions(id, anchor) {
