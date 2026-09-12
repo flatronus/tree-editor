@@ -1379,10 +1379,22 @@ function updateWordCount() {
 
 // Рендерить рядок заголовка через marked (### заголовки, **жирний**, *курсив*, `код`, посилання тощо),
 // повертає внутрішній HTML без зайвого обгортання блоковими тегами — заголовок лишається одним рядком.
+// Екранує маркери нумерованих (1. 2) 3-) та маркованих (- * +) списків на початку
+// рядків заголовка, щоб marked не перетворював їх у <ol>/<ul> — заголовок має
+// лишатися звичайним текстом навіть якщо починається з "1. ..." тощо.
+function escapeTitleListMarkers(text) {
+  return (text || '').split('\n').map(line => {
+    let m = line.match(/^(\s{0,3})(\d{1,9})([.)])(\s.*|)$/);
+    if (m) return m[1] + m[2] + '\\' + m[3] + m[4];
+    m = line.match(/^(\s{0,3})([*+-])(\s.*|)$/);
+    if (m) return m[1] + '\\' + m[2] + m[3];
+    return line;
+  }).join('\n');
+}
 function renderTitleMarkdownHTML(text) {
   const mk = window.marked || (typeof marked !== 'undefined' ? marked : null);
   if (!mk) return (text || '').replace(/</g, '&lt;');
-  const html = mk.parse(text || '', { gfm: true, breaks: true });
+  const html = mk.parse(escapeTitleListMarkers(text || ''), { gfm: true, breaks: true });
   const wrapper = document.createElement('div');
   wrapper.innerHTML = html;
   // Заголовки (h1-h6) лишаємо повноцінними тегами — саме до них прив'язане
@@ -1744,8 +1756,8 @@ function wrapSelectionInTag(tagName) {
 document.getElementById('btn-details')?.addEventListener('click', () => wrapSelectionInTag('details'));
 document.getElementById('btn-summary')?.addEventListener('click', () => wrapSelectionInTag('summary'));
 
-// Почергово розгортає згорнуті <details> у видимій зоні (rich-редактор або перегляд).
-// Кожне клацання відкриває наступний згорнутий блок; коли всі відкриті — згортає всі назад.
+// Розгортає/згортає ВСІ <details> одночасно у видимій зоні (rich-редактор або перегляд).
+// Якщо є хоч один згорнутий блок — відкриває всі; якщо всі відкриті — згортає всі.
 document.getElementById('btn-expand-details')?.addEventListener('click', () => {
   const rich = document.getElementById('editor-rich');
   const prev = document.getElementById('editor-preview');
@@ -1755,12 +1767,8 @@ document.getElementById('btn-expand-details')?.addEventListener('click', () => {
   const detailsEls = container.querySelectorAll('details');
   if (!detailsEls.length) return;
 
-  const closed = Array.from(detailsEls).filter(d => !d.open);
-  if (closed.length) {
-    closed[0].open = true;
-  } else {
-    detailsEls.forEach(d => d.open = false);
-  }
+  const anyClosed = Array.from(detailsEls).some(d => !d.open);
+  detailsEls.forEach(d => { d.open = anyClosed; });
 
   if (!previewActive) { unsaved = true; setSyncStatus('pending'); }
 });
