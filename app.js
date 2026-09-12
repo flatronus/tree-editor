@@ -1264,6 +1264,7 @@ function openPage(id) {
   updateBreadcrumb(id);
 
   previewActive = false;
+  setTitlePreview(false);
   const previewIco = document.querySelector('#btn-preview .btn-icon');
   if (previewIco) previewIco.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
 
@@ -1345,6 +1346,34 @@ function updateWordCount() {
 // ════════════════════════════════════════════════════════════
 //  PREVIEW
 // ════════════════════════════════════════════════════════════
+
+// Рендерить рядок заголовка через marked (### заголовки, **жирний**, *курсив*, `код`, посилання тощо),
+// повертає внутрішній HTML без зайвого обгортання блоковими тегами — заголовок лишається одним рядком.
+function renderTitleMarkdownHTML(text) {
+  const mk = window.marked || (typeof marked !== 'undefined' ? marked : null);
+  if (!mk) return (text || '').replace(/</g, '&lt;');
+  const html = mk.parse(text || '', { gfm: true, breaks: true });
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = html;
+  const blocks = Array.from(wrapper.children).map(el => el.innerHTML);
+  return blocks.length ? blocks.join('<br>') : (text || '').replace(/</g, '&lt;');
+}
+
+// Перемикає заголовок між "сирим" markdown-текстом (редагування) та відформатованим виглядом (перегляд).
+function setTitlePreview(active) {
+  const ta = document.getElementById('page-title');
+  const pv = document.getElementById('page-title-preview');
+  if (!ta || !pv) return;
+  if (active) {
+    pv.innerHTML = renderTitleMarkdownHTML(ta.value);
+    ta.classList.add('hidden');
+    pv.classList.remove('hidden');
+  } else {
+    pv.classList.add('hidden');
+    ta.classList.remove('hidden');
+  }
+}
+
 function togglePreview() {
   const plain = document.getElementById('editor-plain');
   const rich  = document.getElementById('editor-rich');
@@ -1359,11 +1388,13 @@ function togglePreview() {
     prev.innerHTML = html;
     plain.classList.add('hidden'); rich.classList.add('hidden'); prev.classList.remove('hidden');
     renderLatexInElement(prev);
+    setTitlePreview(true);
     if (ico) ico.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
     previewActive = true;
   } else {
     prev.classList.add('hidden');
     applyEditorFormat(activeFormat, getEditorContent());
+    setTitlePreview(false);
     if (ico) ico.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
     previewActive = false;
   }
@@ -1587,6 +1618,7 @@ document.getElementById('btn-format-toggle')?.addEventListener('click', () => {
   state.pages[state.activeId].format = newFmt;
   activeFormat = newFmt;
   previewActive = false;
+  setTitlePreview(false);
   applyEditorFormat(activeFormat, content);
   updateStatusFormat(activeFormat);
   updateFormatToggleBtn();
@@ -1599,6 +1631,7 @@ document.getElementById('format-select')?.addEventListener('change', e => {
   state.pages[state.activeId].format = fmt;
   activeFormat = fmt === 'auto' ? detectFormat(content) : fmt;
   previewActive = false;
+  setTitlePreview(false);
   applyEditorFormat(activeFormat, content); updateStatusFormat(activeFormat); unsaved = true;
   updateFormatToggleBtn();
 });
