@@ -339,12 +339,15 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 }
 #page-title-preview h1, #page-title-preview h2, #page-title-preview h3,
 #page-title-preview h4, #page-title-preview h5, #page-title-preview h6 {
-  font-family: inherit; font-weight: 700; color: inherit; margin: 0; line-height: inherit;
-  display: inline; font-size: inherit;
+  font-family: var(--font-disp); font-weight: 500; color: var(--accent2); margin: 0; line-height: inherit;
+  display: inline;
 }
-#page-title-preview h1 { font-size: 1.35em; }
-#page-title-preview h2 { font-size: 1.2em; }
-#page-title-preview h3 { font-size: 1.1em; }
+#page-title-preview h1 { font-size: 1.5em; }
+#page-title-preview h2 { font-size: 1.35em; }
+#page-title-preview h3 { font-size: 1.2em; }
+#page-title-preview h4 { font-size: 1.1em; }
+#page-title-preview h5 { font-size: 1.05em; }
+#page-title-preview h6 { font-size: 1em; }
 #page-title-preview code { font-family: var(--font-mono); background: var(--bg3); padding: 1px 5px; border-radius: 3px; font-size: .85em; color: #c7254e; }
 #page-title-preview a { color: var(--accent); }
 
