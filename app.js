@@ -995,6 +995,34 @@ function saveBranch(id) {
 function markedParse(text) {
   const mk = window.marked || (typeof marked !== 'undefined' ? marked : null);
   if (!mk) return text.replace(/\n/g, '<br>');
+
+  // ── <details>/<summary>: за специфікацією CommonMark рядок, що починається з
+  // цих тегів, утворює суцільний "html block" аж до першого порожнього рядка —
+  // усередині нього markdown (###, **...**) НЕ парситься зовсім, а йде як є.
+  // Тому обробляємо вміст таких блоків вручну ДО основного парсера і ховаємо
+  // готовий HTML за плейсхолдером, щоб marked не чіпав його вдруге.
+  const detailsStore = [];
+  const detailsPH = (i) => `\x01DETAILS${i}\x01`;
+  text = text.replace(/<details>([\s\S]*?)<\/details>/gi, (_, inner) => {
+    let summaryHtml = '';
+    let rest = inner;
+    const sMatch = inner.match(/^\s*<summary>([\s\S]*?)<\/summary>/i);
+    if (sMatch) {
+      summaryHtml = mk.parse(sMatch[1].trim(), { gfm: true, breaks: true }).trim();
+      rest = inner.slice(sMatch.index + sMatch[0].length);
+    }
+    const bodyHtml = rest.trim() ? mk.parse(rest.trim(), { gfm: true, breaks: true }) : '';
+    const html = '<details>' + (summaryHtml ? '<summary>' + summaryHtml + '</summary>' : '') + bodyHtml + '</details>';
+    detailsStore.push(html);
+    return detailsPH(detailsStore.length - 1);
+  });
+  // "Осиротілий" <summary> без обгортки <details> (наприклад, обгорнули тільки заголовок).
+  text = text.replace(/<summary>([\s\S]*?)<\/summary>/gi, (_, inner) => {
+    const html = '<summary>' + mk.parse(inner.trim(), { gfm: true, breaks: true }).trim() + '</summary>';
+    detailsStore.push(html);
+    return detailsPH(detailsStore.length - 1);
+  });
+
   // gfm: GitHub Flavored Markdown (таблиці, списки без порожнього рядка перед ними)
   // breaks: одиночний \n → <br> (як у більшості редакторів)
   // Видаляємо <br> з рядків таблиці, щоб вони коректно рендерились
@@ -1100,6 +1128,8 @@ function markedParse(text) {
   html = html.replace(/\x01MATH(\d+)\x01/g, (_, i) => mathStore[+i]);
   html = html.replace(/\x01FENCE(\d+)\x01/g, (_, i) => fenceStore[+i]);
   html = html.replace(/<p>\s*(<pre[\s\S]*?<\/pre>)\s*<\/p>/g, '$1');
+  html = html.replace(/<p>\s*\x01DETAILS(\d+)\x01\s*<\/p>/g, (_, i) => detailsStore[+i]);
+  html = html.replace(/\x01DETAILS(\d+)\x01/g, (_, i) => detailsStore[+i]);
   return html;
 }
 
@@ -1355,7 +1385,12 @@ function renderTitleMarkdownHTML(text) {
   const html = mk.parse(text || '', { gfm: true, breaks: true });
   const wrapper = document.createElement('div');
   wrapper.innerHTML = html;
-  const blocks = Array.from(wrapper.children).map(el => el.innerHTML);
+  // Заголовки (h1-h6) лишаємо повноцінними тегами — саме до них прив'язане
+  // форматування (колір/розмір) у CSS. Інші блоки (напр. <p>) розгортаємо,
+  // щоб не ламати однорядковий вигляд поля заголовка.
+  const blocks = Array.from(wrapper.children).map(el =>
+    /^H[1-6]$/.test(el.tagName) ? el.outerHTML : el.innerHTML
+  );
   return blocks.length ? blocks.join('<br>') : (text || '').replace(/</g, '&lt;');
 }
 
