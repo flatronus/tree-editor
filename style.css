@@ -401,16 +401,20 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 #editor-preview blockquote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--text2); margin: .8em 0; font-style: italic; }
 #editor-preview details { margin: .8em 0; }
 #editor-preview details > summary {
-  display: flex; align-items: flex-start; gap: 6px;
   list-style: none; cursor: pointer;
 }
 #editor-preview details > summary::marker { content: ''; display: none; }
 #editor-preview details > summary::-webkit-details-marker { display: none; }
 #editor-preview details > summary::before {
-  content: '▸'; flex-shrink: 0; margin-top: .2em;
+  content: '▸'; display: inline-block; margin-right: 6px;
   color: var(--accent2); font-size: 13px; line-height: 1;
 }
 #editor-preview details[open] > summary::before { content: '▾'; }
+/* Заголовки (### у summary) не повинні починати новий блок — інакше стрілка опиняється над текстом */
+#editor-preview summary h1, #editor-preview summary h2, #editor-preview summary h3,
+#editor-preview summary h4, #editor-preview summary h5, #editor-preview summary h6 {
+  display: inline; margin: 0; font-size: 1.1em;
+}
 #editor-preview table { width: 100%; border-collapse: collapse; margin: 1em 0; }
 #editor-preview th,#editor-preview td { border: 1px solid var(--border2); padding: 6px 10px; font-size: 13px; }
 #editor-preview th { background: var(--bg3); color: var(--accent2); font-weight: 500; }
