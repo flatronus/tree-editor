@@ -1557,8 +1557,8 @@ function showModal(text, onConfirm) {
 //  SIDEBAR
 // ════════════════════════════════════════════════════════════
 function updateTopbarHeight() {
-  const h = document.getElementById('global-topbar').offsetHeight;
-  document.documentElement.style.setProperty('--topbar-actual-h', h + 'px');
+  const w = document.getElementById('global-topbar').offsetWidth;
+  document.documentElement.style.setProperty('--topbar-actual-w', w + 'px');
 }
 function setSidebarOpen(open) {
   const sb = document.getElementById('sidebar');

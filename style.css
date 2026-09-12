@@ -41,6 +41,8 @@
   --warning:   #d97706;
 
   --topbar-h:  44px;
+  --topbar-w:  50px;
+  --topbar-w-touch: 64px;
   --sidebar-w: 260px;
   --radius:    7px;
   --shadow:    0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.05);
@@ -56,22 +58,23 @@
 html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: var(--font-ui); font-size: 14px; }
 
 /* ══ SHELL ══ */
-#app { display: flex; flex-direction: column; height: 100vh; }
+#app { display: flex; flex-direction: row; height: 100vh; }
 
-/* ══ TOPBAR ══ */
+/* ══ TOPBAR (vertical column, left side) ══ */
 #global-topbar {
-  display: flex; align-items: center;
-  min-height: var(--topbar-h);
-  background: linear-gradient(135deg, var(--top) 0%, #5ba3e8 100%);
-  border-bottom: 1px solid var(--top2);
-  padding: 6px 10px; gap: 6px;
+  display: flex; flex-direction: column; align-items: center;
+  width: var(--topbar-w, 50px);
+  background: linear-gradient(160deg, var(--top) 0%, #5ba3e8 100%);
+  border-right: 1px solid var(--top2);
+  padding: 10px 8px; gap: 10px;
   z-index: 200; flex-shrink: 0;
-  position: sticky; top: 0;
-  box-shadow: 0 2px 8px rgba(74,144,217,.3);
+  overflow-y: auto; overflow-x: hidden;
+  scrollbar-width: thin;
+  box-shadow: 2px 0 8px rgba(74,144,217,.3);
 }
 
-.topbar-left  { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
-.topbar-right { display: flex; align-items: center; gap: 5px; flex-shrink: 0; flex-wrap: wrap; }
+.topbar-left  { display: flex; flex-direction: column; align-items: center; gap: 5px; flex-shrink: 0; }
+.topbar-right { display: flex; flex-direction: column; align-items: center; gap: 5px; flex-shrink: 0; }
 .topbar-center {
   flex: 1; min-width: 0;
   font-size: 11px; color: var(--top-muted);
@@ -79,10 +82,20 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   padding: 0 8px; font-family: var(--font-mono);
 }
 
+/* Bottom info group: version / app name / user e-mail — vertical text, tops of letters facing left */
+.topbar-info {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  margin-top: auto; padding-top: 10px; flex-shrink: 0;
+}
+.topbar-info > * {
+  writing-mode: vertical-rl; transform: rotate(180deg);
+  text-orientation: mixed; white-space: nowrap;
+}
+
 .logo {
-  font-family: var(--font-disp); font-size: 17px;
+  font-family: var(--font-disp); font-size: 15px;
   color: var(--top-text); letter-spacing: 1px;
-  margin-left: 4px; white-space: nowrap;
+  white-space: nowrap;
   text-shadow: 0 1px 2px rgba(0,0,0,.15);
 }
 
@@ -122,9 +135,9 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .action-btn.danger:hover { background: rgba(229,62,62,.35); }
 
 /* ── Topbar group separator + details/summary button group ── */
-.topbar-sep { width: 1px; height: 20px; background: rgba(255,255,255,.35); flex-shrink: 0; }
+.topbar-sep { width: 24px; height: 1px; background: rgba(255,255,255,.35); flex-shrink: 0; margin: 2px 0; }
 .btn-group {
-  display: flex; align-items: center; gap: 2px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
   padding: 2px; border-radius: var(--radius);
   background: rgba(255,255,255,.1);
   border: 1px solid rgba(255,255,255,.22);
@@ -135,8 +148,8 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 
 .version-badge {
   font-family: var(--font-mono); font-size: 10px;
-  color: var(--top-muted); white-space: nowrap;
-  margin-left: 2px; flex-shrink: 0;
+  color: var(--top-muted);
+  flex-shrink: 0;
 }
 
 #format-select {
@@ -498,17 +511,6 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 
 /* ══ MOBILE & RESPONSIVE TOPBAR ══ */
 
-/* Topbar can wrap to 2 rows on small screens */
-#global-topbar {
-  flex-wrap: wrap;
-  height: auto;
-  min-height: var(--topbar-h);
-  padding-top: 6px;
-  padding-bottom: 6px;
-  row-gap: 4px;
-}
-.topbar-right { flex-wrap: wrap; row-gap: 4px; }
-
 /* Icon-only action buttons */
 .action-btn.icon-only {
   padding: 5px 9px;
@@ -519,7 +521,7 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 @media (max-width: 540px) {
   .btn-label { display: none; }
   .action-btn { padding: 5px 8px; }
-  .logo { font-size: 14px; }
+  .logo { font-size: 12px; }
   .topbar-center { display: none; }
   #format-select { max-width: 70px; }
 }
@@ -529,6 +531,7 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 
 /* ── Tablet/Mobile: larger buttons (1.5×), sidebar 75% ── */
 @media (max-width: 1024px) {
+  #global-topbar { width: var(--topbar-w-touch, 64px); padding: 10px 10px; gap: 12px; }
   .icon-btn {
     width: 42px; height: 42px; font-size: 18px;
   }
@@ -547,8 +550,8 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 @media (max-width: 1024px) {
   #sidebar {
     position: fixed !important;
-    top: var(--topbar-actual-h, var(--topbar-h)) !important;
-    left: 0 !important; bottom: 0 !important;
+    top: 0 !important;
+    left: var(--topbar-actual-w, 64px) !important; bottom: 0 !important;
     width: 75vw !important; min-width: 220px !important; max-width: 75vw !important;
     z-index: 150; transform: translateX(-100%);
     opacity: 1 !important; pointer-events: auto !important;
@@ -564,7 +567,7 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
     display: block;
     position: fixed;
     inset: 0;
-    top: var(--topbar-actual-h, var(--topbar-h));
+    left: var(--topbar-actual-w, 64px);
     background: rgba(0,0,0,.35);
     z-index: 149;
     opacity: 0;
@@ -586,8 +589,9 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 /* ══ PWA SAFE AREA ══ */
 @supports (padding-top: env(safe-area-inset-top)) {
   #global-topbar {
-    padding-left: max(10px, env(safe-area-inset-left));
-    padding-right: max(10px, env(safe-area-inset-right));
+    padding-top: max(10px, env(safe-area-inset-top));
+    padding-left: max(8px, env(safe-area-inset-left));
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
   }
   #editor-statusbar { padding-bottom: max(3px, env(safe-area-inset-bottom)); }
 }
@@ -604,8 +608,7 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 /* ══ USER EMAIL BADGE ══ */
 #user-email-badge {
   font-size: 11px; color: var(--top-muted);
-  white-space: nowrap; overflow: hidden; max-width: 100px; text-overflow: ellipsis;
-  margin-left: 2px;
+  white-space: nowrap; overflow: hidden; max-height: 130px; text-overflow: ellipsis;
 }
 
 /* ══ STATUS BAR — breadcrumb inline ══ */
@@ -714,7 +717,7 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 /* ══ EMOJI PICKER PANEL ══ */
 #emoji-panel {
   position: fixed;
-  top: calc(var(--topbar-h) + 6px);
+  top: 10px;
   right: 10px;
   z-index: 1500;
   background: var(--bg2);
