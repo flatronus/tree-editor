@@ -67,6 +67,19 @@
       <button id="btn-preview"    class="action-btn icon-only" title="Перегляд / Редагування">
         <span class="btn-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></span>
       </button>
+      <span class="topbar-sep"></span>
+      <span class="btn-group" id="details-btn-group">
+        <button id="btn-details"        class="action-btn icon-only" title="Обгорнути виділене в розкривний текст (details)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/><line x1="4" y1="4" x2="4" y2="20"/><line x1="20" y1="4" x2="20" y2="20"/></svg>
+        </button>
+        <button id="btn-summary"        class="action-btn icon-only" title="Обгорнути виділене в заголовок розкривного тексту (summary)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="6" rx="1"/><line x1="4" y1="15" x2="14" y2="15"/><line x1="4" y1="19" x2="10" y2="19"/></svg>
+        </button>
+        <button id="btn-expand-details" class="action-btn icon-only" title="Розгорнути наступний згорнутий блок (клацайте почергово)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 8 12 13 17 8"/><polyline points="7 15 12 20 17 15"/></svg>
+        </button>
+      </span>
+      <span class="topbar-sep"></span>
       <button id="btn-emoji"      class="action-btn icon-only" title="Вставити іконку / емодзі">
         <!-- smiley face -->
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
@@ -87,6 +100,7 @@
         <!-- logout arrow -->
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
       </button>
+      <span id="app-version" class="version-badge">v7.2.0</span>
     </div>
   </header>
 

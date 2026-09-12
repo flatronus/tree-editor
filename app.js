@@ -1629,6 +1629,74 @@ document.getElementById('btn-delete-page').addEventListener('click', () => {
 
 document.getElementById('btn-preview').addEventListener('click', togglePreview);
 
+// ════════════════════════════════════════════════════════════
+//  DETAILS / SUMMARY (розкривний текст для Markdown)
+// ════════════════════════════════════════════════════════════
+
+// Обгортає виділений текст у тег <tagName>...</tagName>.
+// Працює або в plain/markdown textarea, або в rich contenteditable —
+// залежно від того, який редактор зараз видимий.
+function wrapSelectionInTag(tagName) {
+  if (!state.activeId || previewActive) return;
+  const open  = '<' + tagName + '>';
+  const close = '</' + tagName + '>';
+
+  const plain = document.getElementById('editor-plain');
+  const rich  = document.getElementById('editor-rich');
+
+  if (activeFormat === 'rich' && !rich.classList.contains('hidden')) {
+    rich.focus();
+    const sel = window.getSelection();
+    if (!sel.rangeCount) return;
+    const range = sel.getRangeAt(0);
+    if (!rich.contains(range.commonAncestorContainer)) return;
+    const frag = range.extractContents();
+    const wrapper = document.createElement(tagName);
+    wrapper.appendChild(frag);
+    range.insertNode(wrapper);
+    range.setStartAfter(wrapper);
+    range.setEndAfter(wrapper);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } else {
+    plain.focus();
+    const start = plain.selectionStart;
+    const end   = plain.selectionEnd;
+    const val   = plain.value;
+    const selected = val.slice(start, end);
+    plain.value = val.slice(0, start) + open + selected + close + val.slice(end);
+    const newStart = start + open.length;
+    plain.selectionStart = newStart;
+    plain.selectionEnd   = newStart + selected.length;
+  }
+
+  unsaved = true; setSyncStatus('pending'); updateWordCount();
+}
+
+document.getElementById('btn-details')?.addEventListener('click', () => wrapSelectionInTag('details'));
+document.getElementById('btn-summary')?.addEventListener('click', () => wrapSelectionInTag('summary'));
+
+// Почергово розгортає згорнуті <details> у видимій зоні (rich-редактор або перегляд).
+// Кожне клацання відкриває наступний згорнутий блок; коли всі відкриті — згортає всі назад.
+document.getElementById('btn-expand-details')?.addEventListener('click', () => {
+  const rich = document.getElementById('editor-rich');
+  const prev = document.getElementById('editor-preview');
+  const container = previewActive ? prev : (activeFormat === 'rich' ? rich : null);
+  if (!container) return;
+
+  const detailsEls = container.querySelectorAll('details');
+  if (!detailsEls.length) return;
+
+  const closed = Array.from(detailsEls).filter(d => !d.open);
+  if (closed.length) {
+    closed[0].open = true;
+  } else {
+    detailsEls.forEach(d => d.open = false);
+  }
+
+  if (!previewActive) { unsaved = true; setSyncStatus('pending'); }
+});
+
 document.getElementById('btn-new-page').addEventListener('click', () => {
   // Save current page first, then reset unsaved to prevent double-save
   if (unsaved && state.activeId) saveCurrentEditorToPage();
