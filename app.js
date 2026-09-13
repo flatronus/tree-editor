@@ -603,7 +603,10 @@ function detectFormat(text) {
   if ((text.match(/<[a-z][a-z0-9]*[\s>]/gi) || []).length > 3) return 'rich';
   return md >= 4 ? 'markdown' : 'plain';
 }
-function resolveFormat(page) { return (page.format && page.format !== 'auto') ? page.format : 'plain'; }
+function resolveFormat(page) {
+  if (page.format === 'markdown' || page.format === 'plain' || page.format === 'rich') return page.format;
+  return detectFormat(page.content || ''); // 'auto' або відсутнє значення — визначаємо за вмістом
+}
 
 // ════════════════════════════════════════════════════════════
 //  TREE HELPERS
@@ -1306,8 +1309,9 @@ function openPage(id) {
   setUnsaved(false);
   renderTree();
 
-  // Якщо markdown і є контент — одразу показуємо preview
-  if (activeFormat === 'markdown' && (page.content || '').trim()) {
+  // Сторінку завжди відкриваємо у режимі перегляду (відрендерений вигляд), якщо є контент.
+  // У редагування переходимо лише примусово — кнопкою "Перегляд/Редагування".
+  if ((page.content || '').trim()) {
     togglePreview();
   }
 }
