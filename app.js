@@ -603,10 +603,7 @@ function detectFormat(text) {
   if ((text.match(/<[a-z][a-z0-9]*[\s>]/gi) || []).length > 3) return 'rich';
   return md >= 4 ? 'markdown' : 'plain';
 }
-function resolveFormat(page) {
-  if (page.format === 'markdown' || page.format === 'plain' || page.format === 'rich') return page.format;
-  return detectFormat(page.content || ''); // 'auto' або відсутнє значення — визначаємо за вмістом
-}
+function resolveFormat(page) { return (page.format && page.format !== 'auto') ? page.format : 'plain'; }
 
 // ════════════════════════════════════════════════════════════
 //  TREE HELPERS
@@ -1309,9 +1306,8 @@ function openPage(id) {
   setUnsaved(false);
   renderTree();
 
-  // Сторінку завжди відкриваємо у режимі перегляду (відрендерений вигляд), якщо є контент.
-  // У редагування переходимо лише примусово — кнопкою "Перегляд/Редагування".
-  if ((page.content || '').trim()) {
+  // Якщо markdown і є контент — одразу показуємо preview
+  if (activeFormat === 'markdown' && (page.content || '').trim()) {
     togglePreview();
   }
 }
@@ -1334,48 +1330,7 @@ function applyEditorFormat(fmt, content) {
   const fbar  = document.getElementById('format-bar');
   plain.classList.add('hidden'); rich.classList.add('hidden'); prev.classList.add('hidden'); fbar.classList.add('hidden');
   if (fmt === 'rich') { rich.classList.remove('hidden'); fbar.classList.remove('hidden'); rich.innerHTML = content; renderLatexInElement(rich); }
-  else { plain.classList.remove('hidden'); plain.value = content; updateEditorHighlight(); }
-}
-
-// ── Підсвітка синтаксису в редакторі (markdown/plain) ──────────
-// Підсвічує: html-теги, ### на початку рядка (з урахуванням рівня), **жирний**.
-// Реалізовано через прозору textarea + кольорову підкладку під нею (стандартна техніка,
-// оскільки сам textarea не вміє кольорувати окремі символи).
-function escapeHtmlForHighlight(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-const EDITOR_HL_RE = /(?<heading>^[ \t]{0,3}#{1,6})(?=[ \t]|$)|(?<bold>\*\*[^\n]+?\*\*)|(?<tag><\/?[a-zA-Z][a-zA-Z0-9-]*(?:\s[^<>]*)?>)/gm;
-
-function buildEditorHighlightHTML(text) {
-  let out = '';
-  let last = 0;
-  let m;
-  EDITOR_HL_RE.lastIndex = 0;
-  while ((m = EDITOR_HL_RE.exec(text))) {
-    out += escapeHtmlForHighlight(text.slice(last, m.index));
-    if (m.groups.heading !== undefined) {
-      out += '<span class="hl-heading">' + escapeHtmlForHighlight(m.groups.heading) + '</span>';
-    } else if (m.groups.bold !== undefined) {
-      out += '<span class="hl-bold">' + escapeHtmlForHighlight(m.groups.bold) + '</span>';
-    } else if (m.groups.tag !== undefined) {
-      out += '<span class="hl-tag">' + escapeHtmlForHighlight(m.groups.tag) + '</span>';
-    }
-    last = EDITOR_HL_RE.lastIndex;
-    if (m.index === EDITOR_HL_RE.lastIndex) EDITOR_HL_RE.lastIndex++; // guard: не зациклюватись на нульових збігах
-  }
-  out += escapeHtmlForHighlight(text.slice(last));
-  if (text.endsWith('\n')) out += ' '; // щоб підкладка не "з'їдала" останній порожній рядок
-  return out;
-}
-
-function updateEditorHighlight() {
-  const plain = document.getElementById('editor-plain');
-  const hl = document.getElementById('editor-highlight');
-  if (!plain || !hl) return;
-  hl.innerHTML = buildEditorHighlightHTML(plain.value);
-  hl.scrollTop = plain.scrollTop;
-  hl.scrollLeft = plain.scrollLeft;
+  else { plain.classList.remove('hidden'); plain.value = content; }
 }
 
 function getEditorContent() {
@@ -1793,7 +1748,6 @@ function wrapSelectionInTag(tagName) {
     const newStart = start + open.length;
     plain.selectionStart = newStart;
     plain.selectionEnd   = newStart + selected.length;
-    updateEditorHighlight();
   }
 
   unsaved = true; setSyncStatus('pending'); updateWordCount();
@@ -1882,13 +1836,7 @@ document.getElementById('page-title').addEventListener('input', e => {
   unsaved = true; setSyncStatus('pending');
   autoResizeTitle();
 });
-document.getElementById('editor-plain').addEventListener('input', () => { unsaved = true; setSyncStatus('pending'); updateWordCount(); updateEditorHighlight(); if (state.pages[state.activeId]?.format === 'auto') updateStatusFormat(detectFormat(document.getElementById('editor-plain').value)); });
-document.getElementById('editor-plain').addEventListener('scroll', () => {
-  const hl = document.getElementById('editor-highlight');
-  const plain = document.getElementById('editor-plain');
-  hl.scrollTop = plain.scrollTop;
-  hl.scrollLeft = plain.scrollLeft;
-});
+document.getElementById('editor-plain').addEventListener('input', () => { unsaved = true; setSyncStatus('pending'); updateWordCount(); if (state.pages[state.activeId]?.format === 'auto') updateStatusFormat(detectFormat(document.getElementById('editor-plain').value)); });
 document.getElementById('editor-rich').addEventListener('input', () => { unsaved = true; setSyncStatus('pending'); updateWordCount(); });
 document.getElementById('search-input').addEventListener('input', renderTree);
 
