@@ -380,13 +380,28 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 
 /* editor */
 #editor-container { flex: 1; overflow: hidden; position: relative; }
-#editor-plain, #editor-rich, #editor-preview { position: absolute; inset: 0; width: 100%; height: 100%; }
+#editor-plain, #editor-rich, #editor-preview, #editor-highlight { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+/* Підкладка з підсвіченим синтаксисом: розташована точно під textarea,
+   яка сама стає прозорою (крім курсора), щоб було видно кольоровий текст під нею. */
+#editor-highlight {
+  z-index: 1; margin: 0; overflow: hidden; pointer-events: none;
+  background: var(--bg); color: var(--text); border: none;
+  padding: 20px 40px; font-family: var(--font-mono); font-size: 13.5px;
+  line-height: 1.85; tab-size: 2;
+  white-space: pre-wrap; word-wrap: break-word; word-break: break-word;
+}
+#editor-highlight .hl-heading { color: var(--warning); font-weight: 700; }
+#editor-highlight .hl-bold    { color: #c2185b; font-weight: 700; }
+#editor-highlight .hl-tag     { color: #0d9488; font-weight: 500; }
 
 #editor-plain {
-  background: var(--bg); color: var(--text); border: none; outline: none;
+  position: relative; z-index: 2;
+  background: transparent; color: transparent; caret-color: var(--text); border: none; outline: none;
   padding: 20px 40px; font-family: var(--font-mono); font-size: 13.5px;
   line-height: 1.85; resize: none; tab-size: 2;
 }
+#editor-plain::selection { background: var(--accent-l); color: transparent; }
 #editor-rich {
   background: var(--bg2); color: var(--text); border: none; outline: none;
   padding: 20px 40px; font-family: var(--font-body); font-size: 15px;
@@ -581,7 +596,7 @@ body.labels-expanded .tree-row { align-items: flex-start; padding-top: 5px; padd
 }
 
 @media (max-width: 700px) {
-  #editor-plain, #editor-rich, #editor-preview { padding: 14px 16px; }
+  #editor-plain, #editor-rich, #editor-preview, #editor-highlight { padding: 14px 16px; }
   #page-title { font-size: 18px; }
   #page-title-preview { font-size: 18px; }
 }
